@@ -20,7 +20,7 @@ set -Eeuo pipefail
 # ---------------------------------------------------------------------------
 # Configuration (override via environment for forks / private mirrors / testing)
 # ---------------------------------------------------------------------------
-AWS_PATCH_REPO="${AWS_PATCH_REPO:-https://raw.githubusercontent.com/aws-patch/aws-patch}"
+AWS_PATCH_REPO="${AWS_PATCH_REPO:-https://raw.githubusercontent.com/yousafkhamza/aws-patch}"
 AWS_PATCH_REF="${AWS_PATCH_REF:-main}"
 AWS_PATCH_BASE_URL="${AWS_PATCH_REPO}/${AWS_PATCH_REF}"
 
