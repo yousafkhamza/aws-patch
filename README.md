@@ -5,7 +5,7 @@ detects your OS and package manager, applies updates safely, tells you
 whether a reboot is needed, and never touches your bootloader or your
 installed kernels.
 
-[![ShellCheck](https://github.com/aws-patch/aws-patch/actions/workflows/shellcheck.yml/badge.svg)](.github/workflows/shellcheck.yml)
+[![ShellCheck](https://github.com/yousafkhamza/aws-patch/actions/workflows/shellcheck.yml/badge.svg)](.github/workflows/shellcheck.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ## Why aws-patch
@@ -38,32 +38,61 @@ automatic.
 ### One-line install (recommended)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/aws-patch/aws-patch/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/yousafkhamza/aws-patch/main/install.sh | sudo bash
 ```
 
-With arguments (e.g. auto-reboot if needed):
+By itself this runs an **interactive** session: it detects your
+environment, shows pre-flight checks and AWS recovery guidance, then asks
+for confirmation before installing anything. If there's no TTY attached
+(e.g. run over `curl | sudo bash` in a non-interactive shell), it safely
+defaults to "no" rather than guessing — see [`--yes`](#--yes) below to run
+unattended.
+
+With arguments (e.g. non-interactive with auto-reboot if needed):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/aws-patch/aws-patch/main/install.sh | sudo bash -s -- --reboot
+curl -fsSL https://raw.githubusercontent.com/yousafkhamza/aws-patch/main/install.sh | sudo bash -s -- --yes --reboot
 ```
 
-The installer downloads every required file, verifies each one (non-empty,
-valid shebang) before executing anything, installs to `/opt/aws-patch`,
-symlinks `aws-patch` into `/usr/local/bin`, and cleans up its temp
-directory on exit — success or failure.
+Everything after `-s --` is forwarded verbatim to `aws-patch.sh`, so any
+flag documented in [CLI Options](#cli-options) below works here too.
+
+The installer:
+- Downloads every required file (`aws-patch.sh`, `VERSION`, all of `lib/`)
+  from the pinned branch/ref
+- Verifies each file (non-empty, valid shebang) **before** executing
+  anything — a corrupted or partial download aborts the whole install
+  with no changes made
+- Installs to `/opt/aws-patch` and symlinks `aws-patch` into
+  `/usr/local/bin` so it's on `PATH` for future runs
+- Cleans up its temporary working directory on exit, success or failure
+- Executes `aws-patch.sh` immediately after install, forwarding your
+  arguments
 
 ### Manual install
 
 ```bash
-git clone https://github.com/aws-patch/aws-patch.git
+git clone https://github.com/yousafkhamza/aws-patch.git
 cd aws-patch
 sudo ./aws-patch.sh --check
 ```
+
+Useful if you want to review the code before running it, pin to a specific
+commit/tag, or run it from a private mirror (see `AWS_PATCH_REPO` /
+`AWS_PATCH_REF` environment variables in `install.sh` for mirroring the
+one-line installer itself).
 
 ## Usage
 
 ```bash
 sudo aws-patch.sh [OPTIONS]
+```
+
+Once installed via the one-line installer, the same binary is available
+as just `aws-patch` (symlinked to `/usr/local/bin/aws-patch`):
+
+```bash
+sudo aws-patch [OPTIONS]
 ```
 
 ### CLI Options
@@ -78,39 +107,211 @@ sudo aws-patch.sh [OPTIONS]
 | `--version`  | Print version and exit                                              |
 | `--help`     | Print usage and exit                                                 |
 
-### Examples
+Each option is covered in detail below.
 
-Check current patch/kernel status without changing anything:
+---
 
-```bash
-sudo aws-patch.sh --check
-```
+#### `--check`
 
-See what would be updated, without applying anything:
-
-```bash
-sudo aws-patch.sh --dry-run
-```
-
-Patch non-interactively (e.g. in a cron job or SSM automation document):
+Runs full detection (OS, package manager, architecture, hostname,
+connectivity, disk space, kernel state) and prints the summary block —
+**without installing, upgrading, or touching anything on disk.** No root
+privileges are even required for this mode.
 
 ```bash
-sudo aws-patch.sh --yes
+sudo aws-patch --check
 ```
 
-Patch non-interactively and reboot automatically if the kernel changed:
+```
+== aws-patch v1.0.0 ==
+== Detecting environment ==
+ℹ Hostname:        ip-10-0-1-42
+ℹ OS:              Ubuntu 22.04.5 LTS
+ℹ Package Manager: apt
+ℹ Architecture:    x86_64
+== Pre-flight checks ==
+✔ Internet connectivity: OK
+✔ Disk space: OK
+ℹ Running: 6.8.0-1060-aws | Latest installed: 6.8.0-1060-aws | Reboot required: NO
+== aws-patch Summary ==
+  ...
+  Patch Status:          check_only
+```
+
+Use this for fleet-wide status reporting (see
+[examples/README.md](examples/README.md#check-only-status-report-across-a-fleet-no-changes-made))
+or as a pre-maintenance-window sanity check.
+
+---
+
+#### `--dry-run`
+
+Runs the same detection and pre-flight checks as a live run, then prints
+**exactly which package operations would execute** (`pm_update_repos`,
+`pm_full_upgrade`, `pm_install_kernel_meta`) and lists currently-upgradable
+packages — again, without changing anything.
 
 ```bash
-sudo aws-patch.sh --yes --reboot
+sudo aws-patch --dry-run
 ```
 
-Verbose output for troubleshooting a patch run:
+```
+== Applying patches (pm=apt) ==
+ℹ [dry-run] Would run: pm_update_repos
+ℹ [dry-run] Would run: pm_full_upgrade
+ℹ [dry-run] Would run: pm_install_kernel_meta
+ℹ [dry-run] Would list upgradable packages:
+libssl3/jammy-updates 3.0.2-0ubuntu1.15 amd64 [upgradable from: 3.0.2-0ubuntu1.14]
+...
+```
+
+Unlike `--check`, `--dry-run` still requires root (it needs to query the
+package manager's own upgrade simulation, which several package managers
+restrict to root). Combine with `--verbose` to see full command-level
+detail. Ideal for change-management review before a scheduled maintenance
+window — see
+[examples/README.md](examples/README.md#dry-run-before-a-maintenance-window).
+
+---
+
+#### `--reboot`
+
+If, after patching, the running kernel no longer matches the newest
+installed kernel, `aws-patch` reboots the instance automatically instead
+of just recommending it.
 
 ```bash
-sudo aws-patch.sh --yes --verbose
+sudo aws-patch --yes --reboot
 ```
 
-### Example output
+Without `--reboot`, a required reboot is always just reported and left to
+you — `aws-patch` prompts interactively (or, with `--yes`, logs a warning
+and skips it silently) rather than ever rebooting on its own initiative.
+This flag is the **only** way `aws-patch` will reboot a machine; there is
+no configuration path that causes an automatic reboot without it.
+
+`--reboot` has no effect if no reboot is actually required, and it is
+ignored entirely under `--check` or `--dry-run` (both of which only report
+what *would* happen).
+
+> **Production tip:** pair `--reboot` with a maintenance window or an SSM
+> Automation document with rate control, so a fleet doesn't reboot all at
+> once. See [examples/README.md](examples/README.md#aws-systems-manager-ssm-run-command-document).
+
+---
+
+#### `--yes`
+
+Assumes "yes" for every interactive confirmation `aws-patch` would
+otherwise ask for: the initial "proceed with patching this host?" prompt,
+and (unless `--reboot` is also given) it causes a required-reboot notice
+to be logged rather than prompted for. This is what makes `aws-patch`
+safe to run from cron, SSM Run Command, Ansible, or any other
+non-interactive context.
+
+```bash
+sudo aws-patch --yes
+```
+
+Without `--yes`, running `aws-patch` from a non-interactive shell (e.g.
+piped through `curl | sudo bash`) causes every prompt to safely default to
+**no** rather than silently guessing — this is exactly what happens if
+you run the plain one-liner with no flags in a non-interactive shell and
+it stops at "Aborted by administrator." `--yes` is how you tell it that's
+intentional.
+
+`--yes` does **not** silently skip the connectivity or disk-space
+warnings — it just answers "continue anyway" on your behalf for those
+specific advisory prompts, and still logs every warning it encountered.
+
+---
+
+#### `--verbose`
+
+Enables debug-level (`log_debug`) output on the console, in addition to
+what's already logged to `/var/log/aws-patch.log` regardless of this flag.
+Useful for troubleshooting exactly what `aws-patch` detected and decided
+at each step.
+
+```bash
+sudo aws-patch --yes --verbose
+```
+
+```
+• Detected OS: Ubuntu 22.04.5 LTS (id=ubuntu version=22.04 family=debian)
+• Detected package manager: apt
+• Detected architecture: x86_64
+• Connectivity check passed
+• Disk space check passed for / (18432MB available)
+...
+```
+
+This flag only affects what's printed to your terminal — the log file
+always contains the full debug trail whether or not `--verbose` is set.
+
+---
+
+#### `--version`
+
+Prints the installed version and exits immediately; does nothing else
+(no detection, no root check).
+
+```bash
+$ aws-patch --version
+aws-patch v1.0.0
+```
+
+Useful for confirming which version is installed across a fleet, or in a
+CI pipeline that pins a minimum required version.
+
+---
+
+#### `--help`
+
+Prints full usage information (all flags, examples, safety notes, and the
+configured log file path) and exits immediately.
+
+```bash
+$ aws-patch --help
+```
+
+```
+aws-patch v1.0.0
+Enterprise-grade Linux patch utility for AWS EC2 instances.
+
+Usage:
+  sudo aws-patch.sh [OPTIONS]
+
+Options:
+  --check       Report system/kernel/patch status only; do not install anything
+  --dry-run     Show what would be done without making changes
+  --reboot      Automatically reboot if required after patching
+  --yes         Assume "yes" to any interactive prompts (non-interactive mode)
+  --verbose     Enable debug-level console output
+  --version     Print version and exit
+  --help        Print this help and exit
+...
+```
+
+---
+
+### Combining flags
+
+Flags compose freely. A few common combinations:
+
+| Goal                                                        | Command                                |
+|---------------------------------------------------------------|------------------------------------------|
+| Status report only, safe on any host                          | `sudo aws-patch --check`                  |
+| Preview changes before a maintenance window                   | `sudo aws-patch --dry-run --verbose`      |
+| Unattended patch, leave reboot decision to a human             | `sudo aws-patch --yes`                    |
+| Fully unattended patch, including reboot if needed              | `sudo aws-patch --yes --reboot`           |
+| Debug a failing patch run                                      | `sudo aws-patch --yes --verbose`          |
+
+An unrecognized flag (e.g. a typo) causes `aws-patch` to print an error
+and exit with code `2` rather than silently ignoring it or guessing your
+intent.
+
+### Example output (full live run)
 
 ```
 == aws-patch v1.0.0 ==
@@ -209,6 +410,12 @@ Also validated in CI via `bash -n` and ShellCheck on every push
 **Does aws-patch reboot my instance automatically?**
 Only if you pass `--reboot`, or you say yes to the interactive prompt.
 Never otherwise.
+
+**Why did my `curl | sudo bash` install stop with "Aborted by administrator"?**
+Because no flag was passed to authorize the patch, and piping through
+`curl | sudo bash` gives `aws-patch` no interactive terminal to prompt on
+— so it safely defaults to "no". Add `--yes` (see [`--yes`](#--yes)) to
+run unattended.
 
 **Does aws-patch delete old kernels to save disk space?**
 No, never. Kernel pruning is explicitly disabled on every run.

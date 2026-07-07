@@ -14,7 +14,7 @@ A minimal SSM `AWS-RunShellScript` document parameter set:
 ```json
 {
   "commands": [
-    "curl -fsSL https://raw.githubusercontent.com/aws-patch/aws-patch/main/install.sh | sudo bash -s -- --yes"
+    "curl -fsSL https://raw.githubusercontent.com/yousafkhamza/aws-patch/main/install.sh | sudo bash -s -- --yes"
   ]
 }
 ```

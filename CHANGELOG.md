@@ -51,4 +51,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Never reboots unless `--reboot` is explicitly passed or the administrator
   interactively confirms.
 
-[1.0.0]: https://github.com/aws-patch/aws-patch/releases/tag/v1.0.0
+[1.0.0]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.0.0
