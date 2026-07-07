@@ -17,6 +17,9 @@
 #   pm_get_installed_kernels
 #   pm_list_upgradable
 #   pm_count_security_updates
+#   pm_fix_broken
+#   pm_check_releasever_update   (Amazon Linux 2023 only; no-op elsewhere)
+#   pm_upgrade_releasever        (Amazon Linux 2023 only)
 
 set -Eeuo pipefail
 
@@ -94,6 +97,72 @@ pm_fix_broken() {
     # and installonly_limit protections for kernels remain in effect
     # elsewhere (pm_install_kernel_meta), independent of this repair step.
     common_retry 2 5 -- dnf upgrade -y --best --allowerasing --skip-broken
+}
+
+# ---------------------------------------------------------------------------
+# pm_check_releasever_update
+#   Amazon Linux 2023-specific. AL2023 ships periodic "point release"
+#   snapshots (e.g. 2023.12.20260629) that bundle a coordinated set of
+#   repo metadata -- including, sometimes, a newer kernel. A plain
+#   `dnf upgrade` does NOT cross a point-release boundary on its own; it
+#   only updates within the release currently pinned via /etc/dnf/vars or
+#   the distro default, which is why `dnf upgrade --refresh` can print
+#   "Nothing to do" while a newer AL2023 snapshot (and a newer kernel
+#   inside it) is available and announced in its own WARNING banner.
+#
+#   This function is read-only: it only detects whether a newer release
+#   is available and echoes its version string (e.g. "2023.12.20260629"),
+#   or prints nothing if already on the latest release. No-op (prints
+#   nothing) on every other OS.
+#
+#   Two detection strategies, in order:
+#     1. `dnf check-release-update` -- the dedicated tool Amazon ships for
+#        exactly this check, when present on the image.
+#     2. Fallback: parse the "Available Versions: / Version X:" WARNING
+#        banner that `dnf upgrade --refresh` itself prints, taking the
+#        highest version offered.
+# ---------------------------------------------------------------------------
+pm_check_releasever_update() {
+    if [[ "${OS_ID:-}" != "amzn" || "${OS_VERSION_ID:-}" != 2023* ]]; then
+        return 0
+    fi
+
+    local latest=""
+
+    if command -v dnf >/dev/null 2>&1 && dnf check-release-update --help >/dev/null 2>&1; then
+        latest="$(dnf check-release-update 2>/dev/null \
+            | grep -Eo '2023\.[0-9]+\.[0-9]{8}' | sort -V | tail -n1 || true)"
+    fi
+
+    if [[ -z "$latest" ]]; then
+        # --assumeno guarantees this never applies anything; it only
+        # prints what dnf would do (including the release-update banner)
+        # and exits cleanly.
+        latest="$(dnf upgrade --refresh --assumeno 2>/dev/null \
+            | grep -Eo 'Version 2023\.[0-9]+\.[0-9]{8}:' \
+            | grep -Eo '2023\.[0-9]+\.[0-9]{8}' \
+            | sort -V | tail -n1 || true)"
+    fi
+
+    if [[ -n "$latest" ]]; then
+        printf '%s' "$latest"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# pm_upgrade_releasever <version>
+#   Moves Amazon Linux 2023 to a newer point-release snapshot, e.g.:
+#     dnf upgrade -y --releasever=2023.12.20260629
+#   This can change which kernel version is "latest available" for
+#   pm_install_kernel_meta to pick up afterward, but this function itself
+#   only updates repo metadata/package versions like any other dnf
+#   upgrade -- it never removes an installed kernel and never touches
+#   GRUB/bootloader configuration.
+# ---------------------------------------------------------------------------
+pm_upgrade_releasever() {
+    local target_releasever="${1:?target releasever required}"
+    log_warn "Newer Amazon Linux release available (${target_releasever}); upgrading release metadata before patching"
+    common_retry 2 5 -- dnf upgrade -y --releasever="${target_releasever}"
 }
 
 # ---------------------------------------------------------------------------

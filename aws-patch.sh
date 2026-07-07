@@ -82,6 +82,7 @@ FLAG_BROKEN_FIX="false"
 VERBOSE="false"
 PATCH_STATUS="not_started"
 SECURITY_UPDATE_COUNT=0
+AL_RELEASEVER_UPDATE=""
 
 # ---------------------------------------------------------------------------
 # usage / version
@@ -244,6 +245,16 @@ run_preflight() {
 
     kernel_reboot_required || true
     log_info "$(kernel_summary_line)"
+
+    # Amazon Linux 2023 only: check whether a newer point-release snapshot
+    # is available. Read-only; safe to run even in --check/--dry-run.
+    if declare -F pm_check_releasever_update >/dev/null 2>&1; then
+        AL_RELEASEVER_UPDATE="$(pm_check_releasever_update || true)"
+        export AL_RELEASEVER_UPDATE
+        if [[ -n "$AL_RELEASEVER_UPDATE" ]]; then
+            log_info "Newer Amazon Linux release available: ${AL_RELEASEVER_UPDATE}"
+        fi
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -325,6 +336,9 @@ run_patch() {
     ui_header "Applying patches (pm=${PKG_MANAGER})"
 
     if [[ "$FLAG_DRY_RUN" == "true" ]]; then
+        if [[ -n "${AL_RELEASEVER_UPDATE:-}" ]]; then
+            log_info "[dry-run] Would run: pm_upgrade_releasever (to ${AL_RELEASEVER_UPDATE})"
+        fi
         log_info "[dry-run] Would run: pm_update_repos"
         log_info "[dry-run] Would run: pm_full_upgrade"
         log_info "[dry-run] Would run: pm_install_kernel_meta"
@@ -341,6 +355,24 @@ run_patch() {
         ui_spinner_stop fail
         if ! attempt_broken_fix_and_retry "Refreshing package repositories" pm_update_repos; then
             utils_die 1 "Failed to refresh package repositories"
+        fi
+    fi
+
+    # Amazon Linux 2023 only: cross a point-release boundary first if a
+    # newer snapshot is available, since a newer kernel can be gated
+    # behind it. Non-fatal if it fails -- the normal upgrade still
+    # proceeds against the currently pinned release.
+    if [[ -n "${AL_RELEASEVER_UPDATE:-}" ]] && declare -F pm_upgrade_releasever >/dev/null 2>&1; then
+        _al_releasever_retry_fn() { pm_upgrade_releasever "$AL_RELEASEVER_UPDATE"; }
+
+        ui_spinner_start "Upgrading Amazon Linux release to ${AL_RELEASEVER_UPDATE}"
+        if pm_upgrade_releasever "$AL_RELEASEVER_UPDATE"; then
+            ui_spinner_stop ok
+        else
+            ui_spinner_stop fail
+            if ! attempt_broken_fix_and_retry "Upgrading Amazon Linux release to ${AL_RELEASEVER_UPDATE}" _al_releasever_retry_fn; then
+                log_warn "Failed to upgrade Amazon Linux release to ${AL_RELEASEVER_UPDATE}; continuing with current release"
+            fi
         fi
     fi
 

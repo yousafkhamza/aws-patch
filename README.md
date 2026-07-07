@@ -33,6 +33,15 @@ you.
 Ubuntu kernel flavor detection (Generic / AWS / Virtual / Cloud) is
 automatic.
 
+**Amazon Linux 2023 point releases:** AL2023 periodically publishes
+point-release snapshots (e.g. `2023.12.20260629`) that can gate a newer
+kernel behind a `dnf upgrade --releasever=<version>` boundary that a
+plain `dnf upgrade` won't cross on its own. `aws-patch` detects this
+automatically on every run and crosses the boundary first when needed --
+see [docs/troubleshooting.md](docs/troubleshooting.md#amazon-linux-2023-nothing-to-do-but-a-newer-releasekernel-is-announced)
+for details. No flag required; it's a no-op when already on the latest
+release, and a no-op on every other OS.
+
 ## Installation
 
 ### One-line install (recommended)
@@ -472,6 +481,10 @@ commands you may want to run yourself, or wire into your own pipeline.
 commands) with a short backoff. See
 [docs/troubleshooting.md](docs/troubleshooting.md#package-manager-locks)
 for manual resolution steps.
+
+**On Amazon Linux 2023, `dnf upgrade` shows a newer release is available but says "Nothing to do" -- does aws-patch handle that?**
+Yes, automatically, every run. See
+[docs/troubleshooting.md](docs/troubleshooting.md#amazon-linux-2023-nothing-to-do-but-a-newer-releasekernel-is-announced).
 
 ## Contributing
 

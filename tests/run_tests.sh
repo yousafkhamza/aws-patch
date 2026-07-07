@@ -276,6 +276,111 @@ for pm_file in apt.sh yum.sh dnf.sh; do
 done
 
 # ---------------------------------------------------------------------------
+# Section: Amazon Linux 2023 releasever detection (lib/dnf.sh)
+#   Verifies pm_check_releasever_update against a fake `dnf` reproducing
+#   the exact WARNING banner format AL2023 prints when a newer
+#   point-release snapshot is available, and confirms it's a true no-op
+#   on non-AL2023 systems (including plain RHEL8/9/Rocky/Alma on dnf).
+# ---------------------------------------------------------------------------
+echo "== lib/dnf.sh: AL2023 releasever detection =="
+
+(
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/lib/logger.sh"
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/lib/utils.sh"
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/lib/common.sh"
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/lib/dnf.sh"
+
+    # Case 1: newer release available -- fake dnf reproduces the exact
+    # "Available Versions: / Version X:" banner format, offering four
+    # versions; the highest must be selected.
+    OS_ID="amzn"
+    OS_VERSION_ID="2023"
+    # shellcheck disable=SC2317 # invoked indirectly via pm_check_releasever_update
+    dnf() {
+        case "$*" in
+            *"check-release-update --help"*) return 1 ;;
+            *"upgrade --refresh --assumeno"*)
+                cat <<'BANNER'
+WARNING:
+  A newer release of "Amazon Linux" is available.
+
+  Available Versions:
+
+  Version 2023.12.20260608:
+    Run the following command to upgrade to 2023.12.20260608:
+
+  Version 2023.12.20260611:
+    Run the following command to upgrade to 2023.12.20260611:
+
+  Version 2023.12.20260629:
+    Run the following command to upgrade to 2023.12.20260629:
+
+Dependencies resolved.
+Nothing to do.
+Complete!
+BANNER
+                return 0
+                ;;
+            *) return 0 ;;
+        esac
+    }
+    export -f dnf
+
+    result="$(pm_check_releasever_update)"
+    if [[ "$result" == "2023.12.20260629" ]]; then
+        echo "PASS: picks the highest of several offered AL2023 releasever versions"
+    else
+        echo "FAIL: expected 2023.12.20260629, got '${result}'"
+    fi
+
+    # Case 2: already on the latest release -- no version banner printed.
+    # shellcheck disable=SC2317 # invoked indirectly via pm_check_releasever_update
+    dnf() {
+        case "$*" in
+            *"check-release-update --help"*) return 1 ;;
+            *"upgrade --refresh --assumeno"*)
+                echo "Nothing to do."
+                return 0
+                ;;
+            *) return 0 ;;
+        esac
+    }
+    export -f dnf
+    result="$(pm_check_releasever_update)"
+    if [[ -z "$result" ]]; then
+        echo "PASS: no update available -> empty result"
+    else
+        echo "FAIL: expected empty result, got '${result}'"
+    fi
+
+    # Case 3: not Amazon Linux at all -> must be a true no-op regardless
+    # of what dnf would print (function should return before calling it).
+    OS_ID="rhel"
+    OS_VERSION_ID="9"
+    # shellcheck disable=SC2317 # invoked indirectly via pm_check_releasever_update
+    dnf() { echo "SHOULD NOT BE CALLED"; return 0; }
+    export -f dnf
+    result="$(pm_check_releasever_update)"
+    if [[ -z "$result" ]]; then
+        echo "PASS: non-Amazon-Linux OS -> no-op, dnf not queried"
+    else
+        echo "FAIL: expected no-op on non-AL2023, got '${result}'"
+    fi
+) > /tmp/aws-patch-al2023-test-$$.txt 2>&1
+
+while IFS= read -r line; do
+    case "$line" in
+        PASS:*) pass "${line#PASS: }" ;;
+        FAIL:*) fail "${line#FAIL: }" ;;
+    esac
+done < "/tmp/aws-patch-al2023-test-$$.txt"
+rm -f "/tmp/aws-patch-al2023-test-$$.txt"
+
+# ---------------------------------------------------------------------------
 # Section: attempt_broken_fix_and_retry (sourced from aws-patch.sh in
 # isolation -- main() does not auto-run because aws-patch.sh guards it
 # with a BASH_SOURCE check when sourced rather than executed directly)

@@ -47,6 +47,9 @@ summary_render() {
     printf '  %-22s %s\n' "Installed Kernel:"    "${KERNEL_LATEST_INSTALLED:-unknown}"
     printf '  %-22s %b\n' "Reboot Required:"     "$reboot_display"
     printf '  %-22s %s\n' "Security Updates:"    "$security_display"
+    if [[ -n "${AL_RELEASEVER_UPDATE:-}" ]]; then
+        printf '  %-22s %s\n' "AL Release Update:" "${AL_RELEASEVER_UPDATE} available"
+    fi
     printf '  %-22s %s\n' "Patch Status:"        "${PATCH_STATUS:-unknown}"
     printf '  %-22s %s\n' "Log File:"            "${AWS_PATCH_LOG_FILE:-unknown}"
     printf '\n'

@@ -5,6 +5,36 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] - 2026-07-07
+
+### Added
+- Automatic Amazon Linux 2023 point-release handling (`lib/dnf.sh`:
+  `pm_check_releasever_update`, `pm_upgrade_releasever`). AL2023
+  periodically publishes point-release snapshots (e.g.
+  `2023.12.20260629`) that can gate a newer kernel behind a
+  `dnf upgrade --releasever=<version>` boundary a plain `dnf upgrade`
+  won't cross on its own -- which is why `dnf upgrade --refresh` can
+  print "Nothing to do" immediately below a WARNING banner announcing a
+  newer release. `aws-patch` now detects this automatically on every run
+  (no flag required) using AL2023's own `dnf check-release-update` helper
+  when present, falling back to parsing the same WARNING banner `dnf`
+  itself prints when it isn't. If a newer release is found, `aws-patch`
+  crosses the point-release boundary via
+  `dnf upgrade -y --releasever=<version>` *before* the normal full
+  upgrade and kernel-metapackage step, so a kernel gated behind the newer
+  release becomes reachable in the same run. Reflected in `--check`/live
+  summary output as `AL Release Update: <version> available`, and in
+  `--dry-run` as `Would run: pm_upgrade_releasever (to <version>)`. A
+  true no-op when already on the latest release, and a no-op on every
+  non-Amazon-Linux OS. Failure to cross the boundary is non-fatal (logs a
+  warning and continues patching against the current release) and, when
+  `--broken-fix` is also passed, gets the same repair-and-retry treatment
+  as every other mutating operation.
+- Regression tests for `pm_check_releasever_update` against a fake `dnf`
+  reproducing the real-world multi-version WARNING banner format, the
+  "already on latest release" case, and the "not Amazon Linux" no-op
+  case.
+
 ## [1.1.0] - 2026-07-07
 
 ### Added
@@ -119,6 +149,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Never reboots unless `--reboot` is explicitly passed or the administrator
   interactively confirms.
 
+[1.2.0]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.2.0
 [1.1.0]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.1.0
 [1.0.1]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.0.1
 [1.0.0]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.0.0

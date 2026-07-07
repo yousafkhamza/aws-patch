@@ -25,6 +25,61 @@ package repositories. This can fail because of:
 - `aws-patch --check` and `--dry-run` never block on this; only a live
   patch run will ask for confirmation before continuing.
 
+## Amazon Linux 2023: "Nothing to do" but a newer release/kernel is announced
+
+**Symptom:**
+```
+WARNING:
+  A newer release of "Amazon Linux" is available.
+
+  Available Versions:
+
+  Version 2023.12.20260629:
+    Run the following command to upgrade to 2023.12.20260629:
+      dnf upgrade --releasever=2023.12.20260629
+...
+Dependencies resolved.
+Nothing to do.
+Complete!
+```
+
+**Cause:** Amazon Linux 2023 ships periodic point-release snapshots (e.g.
+`2023.12.20260629`) that bundle a coordinated set of repo metadata --
+sometimes including a newer kernel. A plain `dnf upgrade` only updates
+packages *within* the release currently pinned; it does not cross a
+point-release boundary on its own, which is why it can report "Nothing to
+do" even while the WARNING banner above it announces a newer snapshot.
+
+**Automatic resolution:** `aws-patch` detects this automatically on every
+run (no flag needed) by parsing the same banner `dnf` itself prints, and
+crosses the point-release boundary via `dnf upgrade -y --releasever=<version>`
+*before* running the normal full upgrade and kernel-metapackage step --
+so a kernel gated behind a newer release becomes reachable in the same
+run. You'll see this reflected in the summary output:
+
+```
+== aws-patch Summary ==
+  ...
+  AL Release Update:     2023.12.20260629 available
+  ...
+```
+
+and, during a live run:
+
+```
+⚠ Newer Amazon Linux release available (2023.12.20260629); upgrading release metadata before patching
+```
+
+If nothing is announced (already on the latest point release), this step
+is a silent no-op -- and it's a no-op on every non-Amazon-Linux OS too.
+
+**Manual resolution** (if you want to cross the boundary yourself first):
+
+```bash
+sudo dnf upgrade --releasever=2023.12.20260629 -y
+sudo aws-patch --yes
+```
+
 ## Unmet dependencies (`E: Unmet dependencies`, broken package state)
 
 **Symptom (apt):**
