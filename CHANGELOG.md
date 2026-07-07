@@ -5,6 +5,59 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.4.0] - 2026-07-07
+
+### Changed
+- Both the AL2023 release-update check (`pm_check_releasever_update`,
+  `lib/dnf.sh`) and the predictive kernel-availability check
+  (`pm_get_latest_available_kernel`, `lib/yum.sh` + `lib/dnf.sh`) now
+  collect candidates from every available detection source
+  unconditionally, then pick the true highest across all of them --
+  rather than stopping at the first source that returns something.
+  Different dnf/yum configurations, repo setups, and AL2023 images
+  surface this information under different commands, so checking more
+  sources reduces the chance of missing a real update:
+  - `pm_check_releasever_update`: merges results from `dnf check-update`,
+    `dnf check-update kernel`, and `dnf check-release-update` (when
+    present).
+  - `pm_get_latest_available_kernel` (yum): merges results from
+    `yum list kernel --showduplicates` and `yum check-update kernel`.
+  - `pm_get_latest_available_kernel` (dnf): merges results from
+    `dnf list available kernel`, `dnf list kernel`, and
+    `dnf check-update kernel`.
+- Added regression tests proving this "collect from anywhere" behavior:
+  a case for each function where one source returns nothing but another
+  still has the data, confirming the update is still correctly detected.
+
+## [1.3.1] - 2026-07-07
+
+### Fixed
+- **AL2023 release detection produced no output on a real host.**
+  `pm_check_releasever_update` (`lib/dnf.sh`) previously used
+  `dnf upgrade --refresh --assumeno` to trigger and capture AL2023's
+  release-notification WARNING banner. Verified against a real AL2023
+  instance: that combination does not reliably trigger the banner (likely
+  because `--assumeno` causes dnf to abort before reaching the plugin
+  hook that prints it), so `--check`/live runs silently reported nothing,
+  even when 20+ newer point releases were available. Switched primary
+  detection to `dnf check-update` (and `dnf check-update kernel` as a
+  secondary attempt), which is what was confirmed to actually trigger the
+  banner in practice. `dnf check-release-update` remains as a final
+  fallback for images that ship it.
+- **Kernel-availability check used an unverified `yum`/`dnf` invocation.**
+  `pm_get_latest_available_kernel` (`lib/yum.sh`) used
+  `yum list available kernel --showduplicates`; switched to plain
+  `yum list kernel --showduplicates` (no `available` filter), matching
+  the exact command confirmed to return real data on a live Amazon Linux
+  2 host. The `dnf` equivalent (`lib/dnf.sh`) now falls back to plain
+  `dnf list kernel` if the `available`-filtered query returns nothing,
+  for the same reason.
+- Regression tests updated to reproduce the real, full AL2023 banner
+  reported from a live host (20 versions spanning four different months,
+  deliberately out of chronological order in the listing) rather than a
+  small synthetic sample, and to invoke the corrected `dnf check-update`
+  / `yum list kernel --showduplicates` commands.
+
 ## [1.3.0] - 2026-07-07
 
 ### Added
@@ -183,6 +236,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Never reboots unless `--reboot` is explicitly passed or the administrator
   interactively confirms.
 
+[1.4.0]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.4.0
+[1.3.1]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.3.1
 [1.3.0]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.3.0
 [1.2.0]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.2.0
 [1.1.0]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.1.0

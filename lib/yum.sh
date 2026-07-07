@@ -147,21 +147,37 @@ pm_get_installed_kernels() {
 # ---------------------------------------------------------------------------
 # pm_get_latest_available_kernel
 #   Read-only, predictive: echoes the newest kernel version currently
-#   offered by the repo, whether or not it's installed yet. Lets
+#   known to yum, whether or not it's installed yet. Lets
 #   --check/--dry-run reveal that a live patch run WILL require a reboot
 #   before any packages are touched. Never installs or removes anything.
 #
-#   Equivalent to `yum list available kernel --showduplicates`, which
-#   lists every kernel build the repo currently offers (this is the exact
-#   command that would otherwise need to be run by hand to see this).
+#   Collects kernel version candidates from every source below
+#   unconditionally, then picks the true highest across all of them --
+#   different yum configurations/repo setups surface available kernel
+#   builds differently, so the more sources checked, the less likely a
+#   real update is missed:
+#     - `yum list kernel --showduplicates` (deliberately WITHOUT an
+#       "available"-only filter, which is not reliably supported the
+#       same way across all yum configurations; this lists every kernel
+#       build yum knows about, both installed and available)
+#     - `yum check-update kernel` (explicit update-check output)
+#   If the highest version found happens to already be installed,
+#   kernel_update_available (lib/kernel.sh) correctly reports no update
+#   needed; this function only reports the ceiling of what's known, never
+#   a judgment about install state.
 #   Output is normalized to match pm_get_installed_kernels' format
 #   ("<version>-<release>.<arch>") so the two are directly comparable.
 # ---------------------------------------------------------------------------
 pm_get_latest_available_kernel() {
-    local ver
-    ver="$(yum list available kernel --showduplicates -q 2>/dev/null \
-        | awk '/^kernel\.[a-zA-Z0-9_]+/ {print $2}' \
-        | sort -V | tail -n1)"
+    local candidates ver
+
+    candidates="$(yum list kernel --showduplicates -q 2>/dev/null \
+        | awk '/^kernel\.[a-zA-Z0-9_]+/ {print $2}' || true)"
+    candidates+=$'\n'
+    candidates+="$(yum check-update kernel -q 2>/dev/null \
+        | awk '/^kernel\.[a-zA-Z0-9_]+/ {print $2}' || true)"
+
+    ver="$(printf '%s\n' "$candidates" | grep -E '.' | sort -V | tail -n1 || true)"
 
     if [[ -n "$ver" ]]; then
         printf '%s.%s' "$ver" "${ARCH:-$(uname -m)}"

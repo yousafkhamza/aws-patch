@@ -294,21 +294,67 @@ echo "== lib/dnf.sh: AL2023 releasever detection =="
     # shellcheck disable=SC1091
     source "${REPO_ROOT}/lib/dnf.sh"
 
-    # Case 1: newer release available -- fake dnf reproduces the exact
-    # "Available Versions: / Version X:" banner format, offering four
-    # versions; the highest must be selected.
+    # Case 1: newer release available -- fake dnf reproduces the REAL
+    # AL2023 banner as reported from a live host: 20 versions spanning
+    # months 8, 10, 11, and 12, deliberately out of chronological order
+    # in the listing (dnf lists 10/11/12 before 8) to verify sort -V
+    # picks the true highest rather than the last-listed entry.
     OS_ID="amzn"
     OS_VERSION_ID="2023"
     # shellcheck disable=SC2317 # invoked indirectly via pm_check_releasever_update
     dnf() {
         case "$*" in
-            *"check-release-update --help"*) return 1 ;;
-            *"upgrade --refresh --assumeno"*)
+            *"check-update"*)
                 cat <<'BANNER'
 WARNING:
   A newer release of "Amazon Linux" is available.
 
   Available Versions:
+
+  Version 2023.10.20260105:
+    Run the following command to upgrade to 2023.10.20260105:
+
+  Version 2023.10.20260120:
+    Run the following command to upgrade to 2023.10.20260120:
+
+  Version 2023.10.20260202:
+    Run the following command to upgrade to 2023.10.20260202:
+
+  Version 2023.10.20260216:
+    Run the following command to upgrade to 2023.10.20260216:
+
+  Version 2023.10.20260302:
+    Run the following command to upgrade to 2023.10.20260302:
+
+  Version 2023.10.20260325:
+    Run the following command to upgrade to 2023.10.20260325:
+
+  Version 2023.10.20260330:
+    Run the following command to upgrade to 2023.10.20260330:
+
+  Version 2023.11.20260406:
+    Run the following command to upgrade to 2023.11.20260406:
+
+  Version 2023.11.20260413:
+    Run the following command to upgrade to 2023.11.20260413:
+
+  Version 2023.11.20260427:
+    Run the following command to upgrade to 2023.11.20260427:
+
+  Version 2023.11.20260505:
+    Run the following command to upgrade to 2023.11.20260505:
+
+  Version 2023.11.20260509:
+    Run the following command to upgrade to 2023.11.20260509:
+
+  Version 2023.11.20260511:
+    Run the following command to upgrade to 2023.11.20260511:
+
+  Version 2023.11.20260514:
+    Run the following command to upgrade to 2023.11.20260514:
+
+  Version 2023.11.20260526:
+    Run the following command to upgrade to 2023.11.20260526:
 
   Version 2023.12.20260608:
     Run the following command to upgrade to 2023.12.20260608:
@@ -316,15 +362,21 @@ WARNING:
   Version 2023.12.20260611:
     Run the following command to upgrade to 2023.12.20260611:
 
+  Version 2023.12.20260622:
+    Run the following command to upgrade to 2023.12.20260622:
+
   Version 2023.12.20260629:
     Run the following command to upgrade to 2023.12.20260629:
 
-Dependencies resolved.
-Nothing to do.
-Complete!
+  Version 2023.8.20250707:
+    Run the following command to upgrade to 2023.8.20250707:
+
+  Version 2023.8.20250715:
+    Run the following command to upgrade to 2023.8.20250715:
 BANNER
-                return 0
+                return 100
                 ;;
+            *"check-release-update --help"*) return 1 ;;
             *) return 0 ;;
         esac
     }
@@ -332,7 +384,7 @@ BANNER
 
     result="$(pm_check_releasever_update)"
     if [[ "$result" == "2023.12.20260629" ]]; then
-        echo "PASS: picks the highest of several offered AL2023 releasever versions"
+        echo "PASS: picks the true highest (2023.12.20260629) among 20 real-world versions via dnf check-update"
     else
         echo "FAIL: expected 2023.12.20260629, got '${result}'"
     fi
@@ -341,11 +393,11 @@ BANNER
     # shellcheck disable=SC2317 # invoked indirectly via pm_check_releasever_update
     dnf() {
         case "$*" in
-            *"check-release-update --help"*) return 1 ;;
-            *"upgrade --refresh --assumeno"*)
+            *"check-update"*)
                 echo "Nothing to do."
                 return 0
                 ;;
+            *"check-release-update --help"*) return 1 ;;
             *) return 0 ;;
         esac
     }
@@ -355,6 +407,34 @@ BANNER
         echo "PASS: no update available -> empty result"
     else
         echo "FAIL: expected empty result, got '${result}'"
+    fi
+
+    # Case: "collect from anywhere" -- a bare `dnf check-update` prints
+    # nothing useful, but `dnf check-update kernel` still carries the
+    # banner. Must still be found, since both sources (plus
+    # check-release-update) are collected unconditionally rather than
+    # stopping at the first that responds.
+    # shellcheck disable=SC2317 # invoked indirectly via pm_check_releasever_update
+    dnf() {
+        case "$*" in
+            *"check-update kernel"*)
+                echo "  Version 2023.12.20260629:"
+                return 100
+                ;;
+            *"check-update"*)
+                echo "Nothing to do."
+                return 0
+                ;;
+            *"check-release-update --help"*) return 1 ;;
+            *) return 0 ;;
+        esac
+    }
+    export -f dnf
+    result="$(pm_check_releasever_update)"
+    if [[ "$result" == "2023.12.20260629" ]]; then
+        echo "PASS: pm_check_releasever_update finds data from check-update kernel when bare check-update has none"
+    else
+        echo "FAIL: expected 2023.12.20260629, got '${result}'"
     fi
 
     # Case 3: not Amazon Linux at all -> must be a true no-op regardless
@@ -403,12 +483,12 @@ echo "== kernel_update_available (predictive, pre-patch) =="
 
     ARCH="x86_64"
 
-    # Reproduces the real-world scenario: `yum list available kernel
+    # Reproduces the real-world scenario: `yum list kernel
     # --showduplicates` offers several newer builds than what's installed.
     # shellcheck disable=SC2317 # invoked indirectly via pm_get_latest_available_kernel
     yum() {
         case "$*" in
-            *"list available kernel --showduplicates"*)
+            *"list kernel --showduplicates"*)
                 cat <<'BANNER'
 Available Packages
 kernel.x86_64    4.14.355-282.731.amzn2   amzn2-core
@@ -451,7 +531,7 @@ BANNER
     # shellcheck disable=SC2317 # invoked indirectly via pm_get_latest_available_kernel
     yum() {
         case "$*" in
-            *"list available kernel --showduplicates"*)
+            *"list kernel --showduplicates"*)
                 echo "kernel.x86_64    4.14.355-282.729.amzn2   amzn2-core"
                 ;;
         esac
@@ -461,6 +541,31 @@ BANNER
         echo "FAIL: reported an update when the available kernel matches installed"
     else
         echo "PASS: no update reported when available kernel matches installed"
+    fi
+
+    # Case: "collect from anywhere" -- `yum list kernel --showduplicates`
+    # returns nothing (e.g. blocked/misconfigured on some hosts) but
+    # `yum check-update kernel` still has the data. Must still be found,
+    # since both sources are collected unconditionally rather than
+    # stopping at the first that responds.
+    # shellcheck disable=SC2317 # invoked indirectly via pm_get_latest_available_kernel
+    yum() {
+        case "$*" in
+            *"list kernel --showduplicates"*)
+                return 0
+                ;;
+            *"check-update kernel"*)
+                echo "kernel.x86_64    4.14.355-284.737.amzn2   amzn2-core"
+                return 100
+                ;;
+        esac
+    }
+    export -f yum
+    result="$(pm_get_latest_available_kernel)"
+    if [[ "$result" == "4.14.355-284.737.amzn2.x86_64" ]]; then
+        echo "PASS: pm_get_latest_available_kernel finds data from check-update when list returns nothing"
+    else
+        echo "FAIL: expected 4.14.355-284.737.amzn2.x86_64, got '${result}'"
     fi
 ) > /tmp/aws-patch-kernel-avail-test-$$.txt 2>&1
 
@@ -518,7 +623,7 @@ echo "== Regression: KERNEL_LATEST_AVAILABLE survives outside a subshell =="
     # shellcheck disable=SC2317 # invoked indirectly via pm_get_latest_available_kernel
     yum() {
         case "$*" in
-            *"list available kernel --showduplicates"*)
+            *"list kernel --showduplicates"*)
                 echo "kernel.x86_64    4.14.355-284.737.amzn2   amzn2-core"
                 ;;
         esac

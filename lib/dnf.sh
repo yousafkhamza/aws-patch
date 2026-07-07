@@ -107,43 +107,55 @@ pm_fix_broken() {
 #   repo metadata -- including, sometimes, a newer kernel. A plain
 #   `dnf upgrade` does NOT cross a point-release boundary on its own; it
 #   only updates within the release currently pinned via /etc/dnf/vars or
-#   the distro default, which is why `dnf upgrade --refresh` can print
-#   "Nothing to do" while a newer AL2023 snapshot (and a newer kernel
-#   inside it) is available and announced in its own WARNING banner.
+#   the distro default, which is why `dnf upgrade` can print "Nothing to
+#   do" while a newer AL2023 snapshot (and a newer kernel inside it) is
+#   available and announced in its own WARNING banner.
 #
 #   This function is read-only: it only detects whether a newer release
 #   is available and echoes its version string (e.g. "2023.12.20260629"),
 #   or prints nothing if already on the latest release. No-op (prints
 #   nothing) on every other OS.
 #
-#   Two detection strategies, in order:
-#     1. `dnf check-release-update` -- the dedicated tool Amazon ships for
-#        exactly this check, when present on the image.
-#     2. Fallback: parse the "Available Versions: / Version X:" WARNING
-#        banner that `dnf upgrade --refresh` itself prints, taking the
-#        highest version offered.
+#   Collects release-version candidates from every source below
+#   unconditionally (rather than stopping at the first that returns
+#   something), then picks the true highest across all of them --
+#   different AL2023 images/dnf versions surface this banner under
+#   different invocations, so the more sources checked, the less likely
+#   a real update is missed:
+#     1. `dnf check-update` -- read-only, safe to run anytime, and
+#        confirmed to reliably trigger the release-notification plugin's
+#        WARNING banner on a real AL2023 host. (`dnf upgrade --refresh
+#        --assumeno` does NOT reliably trigger the same banner --
+#        --assumeno appears to skip the plugin hook that prints it.)
+#     2. `dnf check-update kernel` -- same mechanism, scoped to the
+#        kernel package, in case a bare check-update behaves differently
+#        on some images or the banner only appears when a specific
+#        package is queried.
+#     3. `dnf check-release-update` -- a dedicated helper some AL2023
+#        images ship for exactly this check.
 # ---------------------------------------------------------------------------
 pm_check_releasever_update() {
     if [[ "${OS_ID:-}" != "amzn" || "${OS_VERSION_ID:-}" != 2023* ]]; then
         return 0
     fi
 
-    local latest=""
+    local candidates="" latest
+
+    candidates+="$(dnf check-update 2>/dev/null \
+        | grep -Eo 'Version 2023\.[0-9]+\.[0-9]{8}:' \
+        | grep -Eo '2023\.[0-9]+\.[0-9]{8}' || true)"
+    candidates+=$'\n'
+    candidates+="$(dnf check-update kernel 2>/dev/null \
+        | grep -Eo 'Version 2023\.[0-9]+\.[0-9]{8}:' \
+        | grep -Eo '2023\.[0-9]+\.[0-9]{8}' || true)"
 
     if command -v dnf >/dev/null 2>&1 && dnf check-release-update --help >/dev/null 2>&1; then
-        latest="$(dnf check-release-update 2>/dev/null \
-            | grep -Eo '2023\.[0-9]+\.[0-9]{8}' | sort -V | tail -n1 || true)"
+        candidates+=$'\n'
+        candidates+="$(dnf check-release-update 2>/dev/null \
+            | grep -Eo '2023\.[0-9]+\.[0-9]{8}' || true)"
     fi
 
-    if [[ -z "$latest" ]]; then
-        # --assumeno guarantees this never applies anything; it only
-        # prints what dnf would do (including the release-update banner)
-        # and exits cleanly.
-        latest="$(dnf upgrade --refresh --assumeno 2>/dev/null \
-            | grep -Eo 'Version 2023\.[0-9]+\.[0-9]{8}:' \
-            | grep -Eo '2023\.[0-9]+\.[0-9]{8}' \
-            | sort -V | tail -n1 || true)"
-    fi
+    latest="$(printf '%s\n' "$candidates" | grep -E '^2023\.' | sort -V | tail -n1 || true)"
 
     if [[ -n "$latest" ]]; then
         printf '%s' "$latest"
@@ -195,18 +207,34 @@ pm_get_installed_kernels() {
 # ---------------------------------------------------------------------------
 # pm_get_latest_available_kernel
 #   Read-only, predictive: echoes the newest kernel version currently
-#   offered by the repo, whether or not it's installed yet. Lets
+#   known to dnf, whether or not it's installed yet. Lets
 #   --check/--dry-run reveal that a live patch run WILL require a reboot
 #   before any packages are touched. Never installs or removes anything.
 #
+#   Collects kernel version candidates from every source below
+#   unconditionally, then picks the true highest across all of them --
+#   different dnf configurations/repo setups surface available kernel
+#   builds differently, so the more sources checked, the less likely a
+#   real update is missed:
+#     - `dnf list available kernel`
+#     - `dnf list kernel` (installed + available, unfiltered)
+#     - `dnf check-update kernel` (explicit update-check output)
 #   Output is normalized to match pm_get_installed_kernels' format
 #   ("<version>-<release>.<arch>") so the two are directly comparable.
 # ---------------------------------------------------------------------------
 pm_get_latest_available_kernel() {
-    local ver
-    ver="$(dnf list available kernel -q 2>/dev/null \
-        | awk '/^kernel\.[a-zA-Z0-9_]+/ {print $2}' \
-        | sort -V | tail -n1)"
+    local candidates ver
+
+    candidates="$(dnf list available kernel -q 2>/dev/null \
+        | awk '/^kernel\.[a-zA-Z0-9_]+/ {print $2}' || true)"
+    candidates+=$'\n'
+    candidates+="$(dnf list kernel -q 2>/dev/null \
+        | awk '/^kernel\.[a-zA-Z0-9_]+/ {print $2}' || true)"
+    candidates+=$'\n'
+    candidates+="$(dnf check-update kernel -q 2>/dev/null \
+        | awk '/^kernel\.[a-zA-Z0-9_]+/ {print $2}' || true)"
+
+    ver="$(printf '%s\n' "$candidates" | grep -E '.' | sort -V | tail -n1 || true)"
 
     if [[ -n "$ver" ]]; then
         printf '%s.%s' "$ver" "${ARCH:-$(uname -m)}"
