@@ -124,6 +124,34 @@ pm_install_kernel_meta() {
 }
 
 # ---------------------------------------------------------------------------
+# pm_fix_broken
+#   Attempts to repair a broken/unmet-dependency package state, e.g.:
+#     "E: Unmet dependencies. Try 'apt --fix-broken install' ..."
+#   which typically happens when a prior upgrade was interrupted or a
+#   versioned metapackage (like linux-headers-<ver>) was left pointing at
+#   a package version no longer available.
+#
+#   Only ever repairs and reconfigures existing package state; never
+#   removes kernels and never touches GRUB/bootloader configuration.
+#   Invoked automatically by aws-patch.sh when --broken-fix is passed and
+#   a package operation fails after exhausting its normal retries.
+# ---------------------------------------------------------------------------
+pm_fix_broken() {
+    log_warn "Attempting automatic repair of broken package state (apt)"
+
+    # Finish configuring any package left half-installed by an interrupted
+    # prior run before touching dependency resolution.
+    common_retry 1 0 -- dpkg --configure -a || true
+
+    # Let apt's own dependency resolver fix unmet dependencies. This can
+    # install or upgrade packages as needed to reach a consistent state,
+    # but never removes an installed kernel package as a side effect --
+    # apt's --fix-broken only resolves dependency graphs, it doesn't prune
+    # unrelated packages.
+    common_retry 2 5 -- apt-get "${APT_OPTS[@]}" --fix-broken install
+}
+
+# ---------------------------------------------------------------------------
 # pm_get_installed_kernels
 #   Lists installed kernel image versions (one per line), consumed by
 #   lib/kernel.sh. Never removes anything; read-only query.

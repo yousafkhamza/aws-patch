@@ -25,6 +25,63 @@ package repositories. This can fail because of:
 - `aws-patch --check` and `--dry-run` never block on this; only a live
   patch run will ask for confirmation before continuing.
 
+## Unmet dependencies (`E: Unmet dependencies`, broken package state)
+
+**Symptom (apt):**
+```
+E: Unmet dependencies. Try 'apt --fix-broken install' with no packages (or specify a solution).
+ linux-headers-6.17.0-1017-aws : Depends: linux-aws-6.17-headers-6.17.0-1017 but it is not installed
+```
+
+**Cause:** A versioned kernel-related metapackage (headers, image, or the
+`linux-aws`/`linux-generic` bundle) is left pointing at a dependency that
+isn't installed — typically from an interrupted prior upgrade, or a repo
+sync that rotated out an intermediate kernel version before the local
+package database caught up.
+
+**Automatic resolution:** pass `--broken-fix`. When any package operation
+fails after exhausting its normal retries, `aws-patch` runs a
+distro-appropriate repair routine and retries that operation once more:
+
+```bash
+sudo aws-patch --yes --broken-fix
+```
+
+- **apt** (Ubuntu/Debian): `dpkg --configure -a` followed by
+  `apt-get --fix-broken install`
+- **yum** (Amazon Linux 2, RHEL 7, CentOS 7): cache cleanup,
+  `yum-complete-transaction --cleanup-only` and `package-cleanup --cleandupes`
+  where available, then retry with `--skip-broken`
+- **dnf** (Amazon Linux 2023, RHEL 8/9, Rocky, AlmaLinux): cache cleanup
+  then retry with `--best --allowerasing --skip-broken`
+
+None of these repair routines remove an installed kernel or touch
+GRUB/bootloader configuration — see [Safety guarantees](../README.md#safety-guarantees).
+
+**Manual resolution** (if `--broken-fix` doesn't resolve it, or you want
+to fix it before running `aws-patch` again):
+
+```bash
+# 1. See exactly what apt thinks is broken
+sudo apt-get check
+
+# 2. Try apt's own dependency repair
+sudo apt --fix-broken install -y
+
+# 3. If that doesn't resolve it, refresh repos and try installing the
+#    missing package directly
+sudo apt-get update
+sudo apt-get install -y <missing-package-from-the-error>
+
+# 4. If the exact version is no longer in the repo (common after repo
+#    rotation), remove the orphaned headers package instead -- you don't
+#    need headers for a kernel you're not actively building modules against
+sudo apt-get remove -y <orphaned-headers-package>
+
+# 5. Confirm clean state
+sudo apt-get check && sudo apt list --upgradable
+```
+
 ## Low disk space warning
 
 **Symptom:**

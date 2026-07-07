@@ -19,9 +19,14 @@
 
 set -Eeuo pipefail
 
-SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
-REPO_ROOT="$(cd -P "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd)"
-readonly SCRIPT_DIR REPO_ROOT
+# Named distinctly from aws-patch.sh's own internal SCRIPT_DIR: aws-patch.sh
+# is sourced directly (not just invoked as a subprocess) later in this file
+# to unit-test its internal functions, and it declares its own `readonly
+# SCRIPT_DIR`. A same-named readonly variable here would collide when
+# inherited into that subshell.
+TESTS_SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+REPO_ROOT="$(cd -P "${TESTS_SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd)"
+readonly TESTS_SCRIPT_DIR REPO_ROOT
 
 PASS_COUNT=0
 FAIL_COUNT=0
@@ -240,6 +245,94 @@ set +e
 rc=$?
 set -e
 assert_eq "$rc" "2" "aws-patch.sh rejects unknown flags with exit code 2"
+
+if help_output="$("${REPO_ROOT}/aws-patch.sh" --help)" && [[ "$help_output" == *"--broken-fix"* ]]; then
+    pass "aws-patch.sh --help documents --broken-fix"
+else
+    fail "aws-patch.sh --help does not mention --broken-fix"
+fi
+
+# ---------------------------------------------------------------------------
+# Section: pm_fix_broken contract -- every pm module must implement it
+# ---------------------------------------------------------------------------
+echo "== pm_fix_broken contract =="
+
+for pm_file in apt.sh yum.sh dnf.sh; do
+    if (
+        # shellcheck disable=SC1091
+        source "${REPO_ROOT}/lib/logger.sh"
+        # shellcheck disable=SC1091
+        source "${REPO_ROOT}/lib/utils.sh"
+        # shellcheck disable=SC1091
+        source "${REPO_ROOT}/lib/common.sh"
+        # shellcheck disable=SC1090,SC1091
+        source "${REPO_ROOT}/lib/${pm_file}"
+        declare -F pm_fix_broken >/dev/null 2>&1
+    ); then
+        pass "lib/${pm_file}: pm_fix_broken is implemented"
+    else
+        fail "lib/${pm_file}: pm_fix_broken is missing"
+    fi
+done
+
+# ---------------------------------------------------------------------------
+# Section: attempt_broken_fix_and_retry (sourced from aws-patch.sh in
+# isolation -- main() does not auto-run because aws-patch.sh guards it
+# with a BASH_SOURCE check when sourced rather than executed directly)
+# ---------------------------------------------------------------------------
+echo "== attempt_broken_fix_and_retry =="
+
+(
+    source "${REPO_ROOT}/aws-patch.sh"
+
+    PKG_MANAGER="apt"
+
+    # Case 1: --broken-fix not set -> should be a no-op (return 1) and
+    # must NOT call pm_fix_broken at all.
+    FLAG_BROKEN_FIX="false"
+    _fix_called="false"
+    pm_fix_broken() { _fix_called="true"; return 0; }
+    # shellcheck disable=SC2317 # invoked indirectly via attempt_broken_fix_and_retry
+    dummy_retry_fn() { return 1; }
+
+    if ! attempt_broken_fix_and_retry "test op" dummy_retry_fn >/dev/null 2>&1; then
+        if [[ "$_fix_called" == "false" ]]; then
+            echo "PASS: broken-fix disabled -> no-op, pm_fix_broken not called"
+        else
+            echo "FAIL: pm_fix_broken was called despite --broken-fix being disabled"
+        fi
+    else
+        echo "FAIL: expected failure (no-op) when --broken-fix is disabled"
+    fi
+
+    # Case 2: --broken-fix set, repair succeeds, retry succeeds -> overall success
+    FLAG_BROKEN_FIX="true"
+    pm_fix_broken() { return 0; }
+    # shellcheck disable=SC2317 # invoked indirectly via attempt_broken_fix_and_retry
+    retry_fn_succeeds() { return 0; }
+    if attempt_broken_fix_and_retry "test op" retry_fn_succeeds >/dev/null 2>&1; then
+        echo "PASS: repair succeeds + retry succeeds -> overall success"
+    else
+        echo "FAIL: expected success when repair and retry both succeed"
+    fi
+
+    # Case 3: --broken-fix set, repair succeeds, retry still fails -> overall failure
+    # shellcheck disable=SC2317 # invoked indirectly via attempt_broken_fix_and_retry
+    retry_fn_fails() { return 1; }
+    if ! attempt_broken_fix_and_retry "test op" retry_fn_fails >/dev/null 2>&1; then
+        echo "PASS: repair succeeds but retry still fails -> overall failure"
+    else
+        echo "FAIL: expected failure when retry still fails after repair"
+    fi
+) > /tmp/aws-patch-broken-fix-test-$$.txt 2>&1
+
+while IFS= read -r line; do
+    case "$line" in
+        PASS:*) pass "${line#PASS: }" ;;
+        FAIL:*) fail "${line#FAIL: }" ;;
+    esac
+done < "/tmp/aws-patch-broken-fix-test-$$.txt"
+rm -f "/tmp/aws-patch-broken-fix-test-$$.txt"
 
 # ---------------------------------------------------------------------------
 # Results

@@ -103,6 +103,7 @@ sudo aws-patch [OPTIONS]
 | `--dry-run`  | Show what would be done without making any changes                  |
 | `--reboot`   | Automatically reboot if a reboot is required after patching         |
 | `--yes`      | Assume "yes" for prompts (non-interactive / automation-friendly)    |
+| `--broken-fix` | Automatically repair broken/unmet-dependency package state and retry once on failure |
 | `--verbose`  | Enable debug-level console output                                   |
 | `--version`  | Print version and exit                                              |
 | `--help`     | Print usage and exit                                                 |
@@ -226,6 +227,43 @@ specific advisory prompts, and still logs every warning it encountered.
 
 ---
 
+#### `--broken-fix`
+
+If a package operation (repository refresh, full upgrade, or kernel
+metapackage install) fails after exhausting its normal retries,
+`--broken-fix` triggers a distro-appropriate repair routine and then
+retries that one operation exactly once more before giving up.
+
+```bash
+sudo aws-patch --yes --broken-fix
+```
+
+The repair routine differs by package manager, but the safety guarantees
+are identical everywhere: it only repairs and reconfigures **existing**
+package state — it never removes an installed kernel and never touches
+GRUB or bootloader configuration.
+
+| Package Manager | Repair routine |
+|------------------|------------------|
+| **apt** (Ubuntu/Debian) | `dpkg --configure -a` to finish any interrupted install, then `apt-get --fix-broken install` to resolve unmet dependencies |
+| **yum** (Amazon Linux 2, RHEL 7, CentOS 7) | `yum clean all`, completes any interrupted transaction via `yum-complete-transaction --cleanup-only` (if available), deduplicates via `package-cleanup --cleandupes` (if available), then retries with `yum update -y --skip-broken` |
+| **dnf** (Amazon Linux 2023, RHEL 8/9, Rocky, AlmaLinux) | `dnf clean all` + `dnf makecache`, then retries with `dnf upgrade -y --best --allowerasing --skip-broken` |
+
+This is exactly the class of failure covered in
+[docs/troubleshooting.md](docs/troubleshooting.md#unmet-dependencies--e-unmet-dependencies):
+a versioned kernel-related package (e.g. `linux-headers-<version>`) left
+pointing at a dependency no longer available after an interrupted or
+partial prior upgrade.
+
+If the repair itself fails, or the retried operation still fails
+afterward, `aws-patch` reports the failure and exits non-zero exactly as
+it would without `--broken-fix` — this flag makes recovery from a common,
+narrow class of failure automatic; it does not mask or suppress genuine
+failures. Full output from every attempt (including the repair step) is
+always in `/var/log/aws-patch.log` for review.
+
+---
+
 #### `--verbose`
 
 Enables debug-level (`log_debug`) output on the console, in addition to
@@ -305,6 +343,7 @@ Flags compose freely. A few common combinations:
 | Preview changes before a maintenance window                   | `sudo aws-patch --dry-run --verbose`      |
 | Unattended patch, leave reboot decision to a human             | `sudo aws-patch --yes`                    |
 | Fully unattended patch, including reboot if needed              | `sudo aws-patch --yes --reboot`           |
+| Unattended patch that auto-repairs broken dependency state       | `sudo aws-patch --yes --broken-fix`       |
 | Debug a failing patch run                                      | `sudo aws-patch --yes --verbose`          |
 
 An unrecognized flag (e.g. a typo) causes `aws-patch` to print an error

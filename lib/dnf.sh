@@ -67,6 +67,36 @@ pm_security_only() {
 }
 
 # ---------------------------------------------------------------------------
+# pm_fix_broken
+#   Attempts to repair a broken package/dependency state on dnf-based
+#   systems (Amazon Linux 2023, RHEL 8/9, Rocky Linux, AlmaLinux). Common
+#   causes: stale/corrupt repo metadata, or a versioned kernel-related
+#   package left pointing at a version no longer present after a partial
+#   prior upgrade. This function only cleans caches and lets dnf's own
+#   resolver retry with --allowerasing/--skip-broken; it never removes an
+#   installed kernel and never touches GRUB/bootloader configuration.
+#
+#   Invoked automatically by aws-patch.sh when --broken-fix is passed and
+#   a package operation fails after exhausting its normal retries.
+# ---------------------------------------------------------------------------
+pm_fix_broken() {
+    log_warn "Attempting automatic repair of broken package state (dnf)"
+
+    # Stale/corrupt repo metadata is the most common cause of spurious
+    # dependency resolution failures; clear it first.
+    common_retry 1 0 -- dnf clean all || true
+    common_retry 1 0 -- dnf makecache -y || true
+
+    # Retry allowing dnf to erase conflicting duplicate packages and skip
+    # ones it truly cannot resolve, rather than aborting the whole
+    # transaction. This is the least destructive repair path available; it
+    # never force-removes packages this tool didn't already intend to touch,
+    # and installonly_limit protections for kernels remain in effect
+    # elsewhere (pm_install_kernel_meta), independent of this repair step.
+    common_retry 2 5 -- dnf upgrade -y --best --allowerasing --skip-broken
+}
+
+# ---------------------------------------------------------------------------
 # pm_install_kernel_meta
 #   Ensures the latest kernel package is installed. installonly_limit is
 #   explicitly overridden to 0 (unlimited) for this invocation so old

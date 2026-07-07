@@ -79,6 +79,46 @@ pm_security_only() {
 }
 
 # ---------------------------------------------------------------------------
+# pm_fix_broken
+#   Attempts to repair a broken package/transaction state on yum-based
+#   systems (Amazon Linux 2, RHEL 7, CentOS 7). Unlike apt, yum doesn't
+#   normally leave "unmet dependency" errors behind since transactions are
+#   resolved atomically -- but an interrupted yum run, a stale/corrupt
+#   metadata cache, or duplicate package entries left over from a prior
+#   partial upgrade can produce equivalent symptoms. This function only
+#   cleans metadata and completes/repairs existing package state; it never
+#   removes an installed kernel and never touches GRUB/bootloader config.
+#
+#   Invoked automatically by aws-patch.sh when --broken-fix is passed and
+#   a package operation fails after exhausting its normal retries.
+# ---------------------------------------------------------------------------
+pm_fix_broken() {
+    log_warn "Attempting automatic repair of broken package state (yum)"
+
+    # Stale/corrupt repo metadata is the most common cause of spurious
+    # dependency resolution failures; clear it first.
+    common_retry 1 0 -- yum clean all || true
+
+    # Finish any transaction left incomplete by an interrupted prior run.
+    if utils_command_exists yum-complete-transaction; then
+        common_retry 1 0 -- yum-complete-transaction --cleanup-only || true
+    fi
+
+    # Remove duplicate package entries (a common side effect of interrupted
+    # kernel upgrades) if yum-utils is available. This only deduplicates
+    # existing entries; it does not remove distinct installed kernels.
+    if utils_command_exists package-cleanup; then
+        common_retry 1 0 -- package-cleanup --cleandupes -y || true
+    fi
+
+    # Refresh metadata and retry, allowing yum to skip packages it truly
+    # cannot resolve rather than aborting the whole transaction. This is
+    # the least destructive repair path available; it never force-removes
+    # packages this tool didn't already intend to touch.
+    common_retry 2 5 -- yum update -y --skip-broken
+}
+
+# ---------------------------------------------------------------------------
 # pm_install_kernel_meta
 #   Ensures the latest kernel package is installed. On Amazon Linux 2 this
 #   is "kernel"; on RHEL7/CentOS7 also "kernel". We never uninstall older

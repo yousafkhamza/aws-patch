@@ -13,6 +13,8 @@
 #   --dry-run     Show what would be done without making changes
 #   --reboot      Automatically reboot if required after patching
 #   --yes         Assume "yes" to any interactive prompts (non-interactive mode)
+#   --broken-fix  Automatically repair broken/unmet-dependency package state
+#                 and retry once if a patch operation fails (apt/yum/dnf)
 #   --verbose     Enable debug-level console output
 #   --version     Print version and exit
 #   --help        Print this help and exit
@@ -76,6 +78,7 @@ FLAG_CHECK="false"
 FLAG_DRY_RUN="false"
 FLAG_REBOOT="false"
 FLAG_YES="false"
+FLAG_BROKEN_FIX="false"
 VERBOSE="false"
 PATCH_STATUS="not_started"
 SECURITY_UPDATE_COUNT=0
@@ -96,6 +99,8 @@ Options:
   --dry-run     Show what would be done without making changes
   --reboot      Automatically reboot if required after patching
   --yes         Assume "yes" to any interactive prompts (non-interactive mode)
+  --broken-fix  Automatically repair broken/unmet-dependency package state
+                and retry once if a patch operation fails (apt/yum/dnf)
   --verbose     Enable debug-level console output
   --version     Print version and exit
   --help        Print this help and exit
@@ -105,11 +110,15 @@ Examples:
   sudo aws-patch.sh --dry-run
   sudo aws-patch.sh --yes
   sudo aws-patch.sh --yes --reboot
+  sudo aws-patch.sh --yes --broken-fix
 
 Safety:
   aws-patch never removes kernels, never modifies GRUB, and never changes
   the default boot entry. Reboots only happen if --reboot is explicitly
-  passed; otherwise the administrator decides when to reboot.
+  passed; otherwise the administrator decides when to reboot. --broken-fix
+  only repairs and reconfigures existing package state (e.g. dpkg --configure
+  -a, apt --fix-broken install, yum-complete-transaction, dnf clean/retry);
+  it never removes an installed kernel and never touches GRUB.
 
 Log file: ${AWS_PATCH_LOG_FILE}
 EOF
@@ -136,6 +145,9 @@ parse_args() {
                 ;;
             --yes)
                 FLAG_YES="true"
+                ;;
+            --broken-fix)
+                FLAG_BROKEN_FIX="true"
                 ;;
             --verbose)
                 VERBOSE="true"
@@ -259,6 +271,54 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
+# attempt_broken_fix_and_retry <label> <retry_function>
+#   Called when <retry_function> has just failed after exhausting its own
+#   normal retries. If --broken-fix was passed and the active pm module
+#   implements pm_fix_broken, runs the distro-appropriate repair routine
+#   (apt --fix-broken install / yum-complete-transaction / dnf clean+retry)
+#   and then retries <retry_function> exactly once more.
+#
+#   Returns 0 if the repair-and-retry succeeded, 1 otherwise (including
+#   when --broken-fix was not requested, in which case this is a no-op).
+#   Never removes kernels or touches GRUB -- pm_fix_broken implementations
+#   are held to the same safety guarantees as every other pm_* function.
+# ---------------------------------------------------------------------------
+attempt_broken_fix_and_retry() {
+    local label="$1"
+    local retry_fn="$2"
+
+    if [[ "$FLAG_BROKEN_FIX" != "true" ]]; then
+        return 1
+    fi
+
+    if ! declare -F pm_fix_broken >/dev/null 2>&1; then
+        log_warn "pm_fix_broken is not implemented for pm=${PKG_MANAGER}; cannot auto-repair"
+        return 1
+    fi
+
+    log_warn "${label} failed; --broken-fix is enabled, attempting automatic repair"
+
+    ui_spinner_start "Repairing broken package state"
+    if pm_fix_broken; then
+        ui_spinner_stop ok
+    else
+        ui_spinner_stop fail
+        log_error "Automatic repair did not resolve the broken package state"
+        return 1
+    fi
+
+    log_info "Retrying: ${label}"
+    ui_spinner_start "${label} (retry after repair)"
+    if "$retry_fn"; then
+        ui_spinner_stop ok
+        return 0
+    else
+        ui_spinner_stop fail
+        return 1
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Patch execution
 # ---------------------------------------------------------------------------
 run_patch() {
@@ -279,7 +339,9 @@ run_patch() {
         ui_spinner_stop ok
     else
         ui_spinner_stop fail
-        utils_die 1 "Failed to refresh package repositories"
+        if ! attempt_broken_fix_and_retry "Refreshing package repositories" pm_update_repos; then
+            utils_die 1 "Failed to refresh package repositories"
+        fi
     fi
 
     ui_spinner_start "Applying package upgrades"
@@ -287,7 +349,9 @@ run_patch() {
         ui_spinner_stop ok
     else
         ui_spinner_stop fail
-        utils_die 1 "Package upgrade failed"
+        if ! attempt_broken_fix_and_retry "Applying package upgrades" pm_full_upgrade; then
+            utils_die 1 "Package upgrade failed"
+        fi
     fi
 
     ui_spinner_start "Ensuring latest kernel package is installed"
@@ -295,7 +359,9 @@ run_patch() {
         ui_spinner_stop ok
     else
         ui_spinner_stop fail
-        log_warn "Kernel metapackage installation reported an issue; continuing"
+        if ! attempt_broken_fix_and_retry "Ensuring latest kernel package is installed" pm_install_kernel_meta; then
+            log_warn "Kernel metapackage installation reported an issue; continuing"
+        fi
     fi
 
     SECURITY_UPDATE_COUNT="$(pm_count_security_updates 2>/dev/null || echo 0)"
@@ -388,4 +454,9 @@ main() {
     handle_reboot
 }
 
-main "$@"
+# Only auto-run when executed directly (not when sourced, e.g. by
+# tests/run_tests.sh, which needs to call individual functions in
+# isolation without triggering a full patch run).
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

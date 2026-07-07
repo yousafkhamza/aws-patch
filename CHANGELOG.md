@@ -5,6 +5,47 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] - 2026-07-07
+
+### Added
+- New `--broken-fix` CLI flag. When a package operation (repository
+  refresh, full upgrade, or kernel metapackage install) fails after
+  exhausting its normal retries, `aws-patch` now runs a distro-appropriate
+  repair routine and retries that operation once more before giving up:
+  - **apt** (Ubuntu/Debian): `dpkg --configure -a` followed by
+    `apt-get --fix-broken install`, addressing the common
+    `E: Unmet dependencies` failure (e.g. a versioned
+    `linux-headers-<version>` package left pointing at a dependency no
+    longer installed after an interrupted prior upgrade).
+  - **yum** (Amazon Linux 2, RHEL 7, CentOS 7): `yum clean all`,
+    `yum-complete-transaction --cleanup-only` and
+    `package-cleanup --cleandupes` where available, then retries with
+    `--skip-broken`.
+  - **dnf** (Amazon Linux 2023, RHEL 8/9, Rocky, AlmaLinux): cache cleanup
+    then retries with `--best --allowerasing --skip-broken`.
+  - Every `pm_fix_broken` implementation is held to the same safety
+    guarantees as the rest of the tool: it only repairs/reconfigures
+    existing package state, and never removes an installed kernel or
+    touches GRUB/bootloader configuration. If the repair or retry still
+    fails, `aws-patch` reports the failure and exits non-zero exactly as
+    it would without the flag -- `--broken-fix` never masks a genuine,
+    unrecoverable failure.
+- Regression tests for the new `pm_fix_broken` contract (present in all
+  three pm modules) and for `attempt_broken_fix_and_retry`'s three
+  branches (repair disabled / repair+retry succeed / repair succeeds but
+  retry still fails).
+- `aws-patch.sh` can now be safely `source`d (e.g. by the test suite)
+  without auto-executing `main`, via a `BASH_SOURCE` guard at the bottom
+  of the file.
+
+### Fixed
+- Renamed a variable in `tests/run_tests.sh` (`SCRIPT_DIR` ->
+  `TESTS_SCRIPT_DIR`) that collided with `aws-patch.sh`'s own internal
+  `readonly SCRIPT_DIR` when the latter was sourced directly for unit
+  testing inside a subshell that inherits the parent's readonly
+  variables -- the collision caused that test subshell to abort silently
+  with no visible error.
+
 ## [1.0.1] - 2026-07-07
 
 ### Fixed
@@ -78,5 +119,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Never reboots unless `--reboot` is explicitly passed or the administrator
   interactively confirms.
 
+[1.1.0]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.1.0
 [1.0.1]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.0.1
 [1.0.0]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.0.0
