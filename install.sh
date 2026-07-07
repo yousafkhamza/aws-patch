@@ -2,7 +2,7 @@
 
 set -Eeuo pipefail
 
-BASE_URL="BASE_URL="https://raw.githubusercontent.com/yousafkhamza/aws-patch/main"
+BASE_URL="https://raw.githubusercontent.com/yousafkhamza/aws-patch/main"
 
 TMP_DIR="$(mktemp -d)"
 
