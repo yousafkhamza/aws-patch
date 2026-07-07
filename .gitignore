@@ -1,0 +1,15 @@
+*.log
+
+*.swp
+
+*.swo
+
+.vscode
+
+.idea
+
+tmp
+
+dist
+
+build
