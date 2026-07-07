@@ -1,15 +1,23 @@
+# Logs
 *.log
+/var/log/aws-patch.log
 
+# Editor / OS cruft
+.DS_Store
 *.swp
-
 *.swo
+*~
 
-.vscode
+# Local test artifacts
+/tests/tmp/
+/tests/output/
+*.bats.tmp
 
-.idea
+# Packaging artifacts
+*.tar.gz
+*.deb
+*.rpm
 
-tmp
-
-dist
-
-build
+# Local override configs (never commit real install prefixes/refs)
+.env
+.env.local
