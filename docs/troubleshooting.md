@@ -25,6 +25,32 @@ package repositories. This can fail because of:
 - `aws-patch --check` and `--dry-run` never block on this; only a live
   patch run will ask for confirmation before continuing.
 
+## `--check` says "Reboot Required: NO" but I know a newer kernel exists
+
+**Symptom:** `yum list kernel --showduplicates` (or `apt-cache policy`,
+`dnf list available kernel`) shows a newer kernel build than
+`uname -r`, but `aws-patch --check` reports `Reboot Required: NO`.
+
+**This is expected, and not a conflict.** `Reboot Required` answers "is
+the running kernel different from what's currently *installed*?" Since
+`--check` never installs anything, that comparison will always say NO
+until a real patch run actually installs the newer kernel.
+
+To see whether patching *would* pull in a newer kernel -- before running
+it -- look at the `Available Kernel` line instead, which compares the
+running/installed kernel against what the **repo** currently offers:
+
+```
+== aws-patch Summary ==
+  Installed Kernel:      4.14.355-282.729.amzn2.x86_64
+  Available Kernel:      4.14.355-284.737.amzn2.x86_64 (not yet installed)
+  Reboot Required:       NO
+```
+
+If `Available Kernel` is present, a live `aws-patch --yes` run will
+install it and will then require a reboot, even though `--check` alone
+correctly reports NO beforehand.
+
 ## Amazon Linux 2023: "Nothing to do" but a newer release/kernel is announced
 
 **Symptom:**

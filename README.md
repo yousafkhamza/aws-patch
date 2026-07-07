@@ -42,6 +42,20 @@ see [docs/troubleshooting.md](docs/troubleshooting.md#amazon-linux-2023-nothing-
 for details. No flag required; it's a no-op when already on the latest
 release, and a no-op on every other OS.
 
+**Predicting a reboot before patching:** `--check` and `--dry-run` also
+report whether a newer kernel is already sitting in the repo -- not just
+whether one has already been installed. This means you can know a live
+patch run *will* require a reboot before you run it, not just after:
+
+```
+== aws-patch Summary ==
+  ...
+  Installed Kernel:      4.14.355-282.729.amzn2.x86_64
+  Available Kernel:      4.14.355-284.737.amzn2.x86_64 (not yet installed)
+  Reboot Required:       NO
+  ...
+```
+
 ## Installation
 
 ### One-line install (recommended)
@@ -142,9 +156,10 @@ sudo aws-patch --check
 == Pre-flight checks ==
 ✔ Internet connectivity: OK
 ✔ Disk space: OK
-ℹ Running: 6.8.0-1060-aws | Latest installed: 6.8.0-1060-aws | Reboot required: NO
+ℹ Running: 6.8.0-1060-aws | Latest installed: 6.8.0-1060-aws | Reboot required: NO | Available: 6.8.0-1063-aws (patching would require a reboot)
 == aws-patch Summary ==
   ...
+  Available Kernel:      6.8.0-1063-aws (not yet installed)
   Patch Status:          check_only
 ```
 

@@ -381,6 +381,178 @@ done < "/tmp/aws-patch-al2023-test-$$.txt"
 rm -f "/tmp/aws-patch-al2023-test-$$.txt"
 
 # ---------------------------------------------------------------------------
+# Section: predictive kernel availability (kernel_update_available)
+#   Verifies that a newer kernel sitting in the repo -- but not yet
+#   installed -- is correctly detected via each pm module's
+#   pm_get_latest_available_kernel, and that kernel_update_available
+#   reports it as an available update ahead of any actual patching.
+# ---------------------------------------------------------------------------
+echo "== kernel_update_available (predictive, pre-patch) =="
+
+(
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/lib/logger.sh"
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/lib/utils.sh"
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/lib/common.sh"
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/lib/yum.sh"
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/lib/kernel.sh"
+
+    ARCH="x86_64"
+
+    # Reproduces the real-world scenario: `yum list available kernel
+    # --showduplicates` offers several newer builds than what's installed.
+    # shellcheck disable=SC2317 # invoked indirectly via pm_get_latest_available_kernel
+    yum() {
+        case "$*" in
+            *"list available kernel --showduplicates"*)
+                cat <<'BANNER'
+Available Packages
+kernel.x86_64    4.14.355-282.731.amzn2   amzn2-core
+kernel.x86_64    4.14.355-282.733.amzn2   amzn2-core
+kernel.x86_64    4.14.355-284.735.amzn2   amzn2-core
+kernel.x86_64    4.14.355-284.737.amzn2   amzn2-core
+BANNER
+                ;;
+        esac
+    }
+    export -f yum
+
+    # shellcheck disable=SC2317 # invoked indirectly via pm_get_installed_kernels
+    rpm() {
+        if [[ "$*" == *"-q kernel"* ]]; then
+            echo "4.14.355-282.729.amzn2.x86_64"
+        fi
+    }
+    export -f rpm
+
+    result="$(pm_get_latest_available_kernel)"
+    if [[ "$result" == "4.14.355-284.737.amzn2.x86_64" ]]; then
+        echo "PASS: pm_get_latest_available_kernel (yum) picks the highest of several available builds"
+    else
+        echo "FAIL: expected 4.14.355-284.737.amzn2.x86_64, got '${result}'"
+    fi
+
+    if kernel_update_available; then
+        if [[ "$KERNEL_LATEST_AVAILABLE" == "4.14.355-284.737.amzn2.x86_64" ]]; then
+            echo "PASS: kernel_update_available detects newer kernel ahead of any patching"
+        else
+            echo "FAIL: KERNEL_LATEST_AVAILABLE unexpected value '${KERNEL_LATEST_AVAILABLE}'"
+        fi
+    else
+        echo "FAIL: expected kernel_update_available to report an update"
+    fi
+
+    # Case: repo offers nothing newer than what's already installed ->
+    # must NOT report an update.
+    # shellcheck disable=SC2317 # invoked indirectly via pm_get_latest_available_kernel
+    yum() {
+        case "$*" in
+            *"list available kernel --showduplicates"*)
+                echo "kernel.x86_64    4.14.355-282.729.amzn2   amzn2-core"
+                ;;
+        esac
+    }
+    export -f yum
+    if kernel_update_available; then
+        echo "FAIL: reported an update when the available kernel matches installed"
+    else
+        echo "PASS: no update reported when available kernel matches installed"
+    fi
+) > /tmp/aws-patch-kernel-avail-test-$$.txt 2>&1
+
+while IFS= read -r line; do
+    case "$line" in
+        PASS:*) pass "${line#PASS: }" ;;
+        FAIL:*) fail "${line#FAIL: }" ;;
+    esac
+done < "/tmp/aws-patch-kernel-avail-test-$$.txt"
+rm -f "/tmp/aws-patch-kernel-avail-test-$$.txt"
+
+for pm_file in apt.sh yum.sh dnf.sh; do
+    if (
+        # shellcheck disable=SC1091
+        source "${REPO_ROOT}/lib/logger.sh"
+        # shellcheck disable=SC1091
+        source "${REPO_ROOT}/lib/utils.sh"
+        # shellcheck disable=SC1091
+        source "${REPO_ROOT}/lib/common.sh"
+        # shellcheck disable=SC1090,SC1091
+        source "${REPO_ROOT}/lib/${pm_file}"
+        declare -F pm_get_latest_available_kernel >/dev/null 2>&1
+    ); then
+        pass "lib/${pm_file}: pm_get_latest_available_kernel is implemented"
+    else
+        fail "lib/${pm_file}: pm_get_latest_available_kernel is missing"
+    fi
+done
+
+# ---------------------------------------------------------------------------
+# Regression test: KERNEL_LATEST_AVAILABLE must survive as a real shell
+# variable after the pre-flight sequence, not just appear in the printed
+# kernel_summary_line text. A prior integration bug called
+# kernel_update_available only implicitly inside
+# `log_info "$(kernel_summary_line)")` -- a command substitution, which
+# runs in a subshell -- so the variable it set was silently discarded and
+# never reached summary_render, even though the console line displayed it
+# correctly. This asserts the variable itself, not just the printed text.
+# ---------------------------------------------------------------------------
+echo "== Regression: KERNEL_LATEST_AVAILABLE survives outside a subshell =="
+
+(
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/lib/logger.sh"
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/lib/utils.sh"
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/lib/common.sh"
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/lib/yum.sh"
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/lib/kernel.sh"
+
+    ARCH="x86_64"
+    # shellcheck disable=SC2317 # invoked indirectly via pm_get_latest_available_kernel
+    yum() {
+        case "$*" in
+            *"list available kernel --showduplicates"*)
+                echo "kernel.x86_64    4.14.355-284.737.amzn2   amzn2-core"
+                ;;
+        esac
+    }
+    export -f yum
+    # shellcheck disable=SC2317 # invoked indirectly via pm_get_installed_kernels
+    rpm() {
+        if [[ "$*" == *"-q kernel"* ]]; then
+            echo "4.14.355-282.729.amzn2.x86_64"
+        fi
+    }
+    export -f rpm
+
+    # Mirrors the real run_preflight sequence exactly.
+    kernel_reboot_required || true
+    kernel_update_available || true
+    _discard="$(kernel_summary_line)"
+
+    if [[ "${KERNEL_LATEST_AVAILABLE:-}" == "4.14.355-284.737.amzn2.x86_64" ]]; then
+        echo "PASS: KERNEL_LATEST_AVAILABLE persists after the pre-flight sequence"
+    else
+        echo "FAIL: KERNEL_LATEST_AVAILABLE was lost (got '${KERNEL_LATEST_AVAILABLE:-<unset>}')"
+    fi
+) > /tmp/aws-patch-subshell-regression-$$.txt 2>&1
+
+while IFS= read -r line; do
+    case "$line" in
+        PASS:*) pass "${line#PASS: }" ;;
+        FAIL:*) fail "${line#FAIL: }" ;;
+    esac
+done < "/tmp/aws-patch-subshell-regression-$$.txt"
+rm -f "/tmp/aws-patch-subshell-regression-$$.txt"
+
+# ---------------------------------------------------------------------------
 # Section: attempt_broken_fix_and_retry (sourced from aws-patch.sh in
 # isolation -- main() does not auto-run because aws-patch.sh guards it
 # with a BASH_SOURCE check when sourced rather than executed directly)

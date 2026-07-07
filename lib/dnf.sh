@@ -15,6 +15,7 @@
 #   pm_security_only
 #   pm_install_kernel_meta
 #   pm_get_installed_kernels
+#   pm_get_latest_available_kernel
 #   pm_list_upgradable
 #   pm_count_security_updates
 #   pm_fix_broken
@@ -189,6 +190,27 @@ pm_install_kernel_meta() {
 # ---------------------------------------------------------------------------
 pm_get_installed_kernels() {
     rpm -q kernel --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n' 2>/dev/null | sort -V
+}
+
+# ---------------------------------------------------------------------------
+# pm_get_latest_available_kernel
+#   Read-only, predictive: echoes the newest kernel version currently
+#   offered by the repo, whether or not it's installed yet. Lets
+#   --check/--dry-run reveal that a live patch run WILL require a reboot
+#   before any packages are touched. Never installs or removes anything.
+#
+#   Output is normalized to match pm_get_installed_kernels' format
+#   ("<version>-<release>.<arch>") so the two are directly comparable.
+# ---------------------------------------------------------------------------
+pm_get_latest_available_kernel() {
+    local ver
+    ver="$(dnf list available kernel -q 2>/dev/null \
+        | awk '/^kernel\.[a-zA-Z0-9_]+/ {print $2}' \
+        | sort -V | tail -n1)"
+
+    if [[ -n "$ver" ]]; then
+        printf '%s.%s' "$ver" "${ARCH:-$(uname -m)}"
+    fi
 }
 
 # ---------------------------------------------------------------------------

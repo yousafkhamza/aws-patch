@@ -15,6 +15,7 @@
 #   pm_security_only
 #   pm_install_kernel_meta
 #   pm_get_installed_kernels
+#   pm_get_latest_available_kernel
 #   pm_list_upgradable
 #   pm_count_security_updates
 
@@ -161,6 +162,25 @@ pm_get_installed_kernels() {
         | awk '$1 ~ /^linux-image-[0-9]/ {print $1}' \
         | sed -E 's/^linux-image-//' \
         | sort -V
+}
+
+# ---------------------------------------------------------------------------
+# pm_get_latest_available_kernel
+#   Read-only, predictive: echoes the newest kernel version currently
+#   offered by the repo, whether or not it's installed yet. Lets
+#   --check/--dry-run reveal that a live patch run WILL require a reboot
+#   before any packages are touched. Never installs or removes anything.
+#
+#   Uses `apt-cache search` to enumerate every versioned linux-image-*
+#   package apt currently knows about (from repo metadata, refreshed by
+#   pm_update_repos), then takes the highest version -- this reflects
+#   what's available even if apt hasn't been asked to upgrade yet.
+# ---------------------------------------------------------------------------
+pm_get_latest_available_kernel() {
+    apt-cache search --names-only '^linux-image-[0-9]' 2>/dev/null \
+        | awk '{print $1}' \
+        | sed -E 's/^linux-image-//' \
+        | sort -V | tail -n1
 }
 
 # ---------------------------------------------------------------------------

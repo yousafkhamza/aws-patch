@@ -45,6 +45,9 @@ summary_render() {
     printf '  %-22s %s\n' "Architecture:"        "${ARCH:-unknown}"
     printf '  %-22s %s\n' "Running Kernel:"      "${KERNEL_RUNNING:-unknown}"
     printf '  %-22s %s\n' "Installed Kernel:"    "${KERNEL_LATEST_INSTALLED:-unknown}"
+    if [[ -n "${KERNEL_LATEST_AVAILABLE:-}" && "${KERNEL_LATEST_AVAILABLE}" != "${KERNEL_LATEST_INSTALLED:-}" ]]; then
+        printf '  %-22s %s\n' "Available Kernel:" "${KERNEL_LATEST_AVAILABLE} (not yet installed)"
+    fi
     printf '  %-22s %b\n' "Reboot Required:"     "$reboot_display"
     printf '  %-22s %s\n' "Security Updates:"    "$security_display"
     if [[ -n "${AL_RELEASEVER_UPDATE:-}" ]]; then
@@ -57,8 +60,11 @@ summary_render() {
     if utils_is_true "${KERNEL_REBOOT_REQUIRED:-false}"; then
         log_warn "A reboot is recommended to run the latest installed kernel."
         log_warn "aws-patch never reboots automatically unless --reboot was passed."
+    elif [[ -n "${KERNEL_LATEST_AVAILABLE:-}" && "${KERNEL_LATEST_AVAILABLE}" != "${KERNEL_LATEST_INSTALLED:-}" ]]; then
+        log_warn "A newer kernel (${KERNEL_LATEST_AVAILABLE}) is available but not yet installed."
+        log_warn "Patching will install it and will then require a reboot."
     fi
 
     # Persist a machine-parseable summary line to the log for audit trails.
-    log_line "SUMMARY" "host=${HOSTNAME_FQDN:-unknown} os=${OS_NAME:-unknown} pm=${PKG_MANAGER:-unknown} arch=${ARCH:-unknown} running_kernel=${KERNEL_RUNNING:-unknown} latest_kernel=${KERNEL_LATEST_INSTALLED:-unknown} reboot_required=${KERNEL_REBOOT_REQUIRED:-unknown} security_updates=${security_display} status=${PATCH_STATUS:-unknown}"
+    log_line "SUMMARY" "host=${HOSTNAME_FQDN:-unknown} os=${OS_NAME:-unknown} pm=${PKG_MANAGER:-unknown} arch=${ARCH:-unknown} running_kernel=${KERNEL_RUNNING:-unknown} latest_kernel=${KERNEL_LATEST_INSTALLED:-unknown} available_kernel=${KERNEL_LATEST_AVAILABLE:-none} reboot_required=${KERNEL_REBOOT_REQUIRED:-unknown} security_updates=${security_display} status=${PATCH_STATUS:-unknown}"
 }

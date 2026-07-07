@@ -5,6 +5,40 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.3.0] - 2026-07-07
+
+### Added
+- Predictive kernel availability check. Previously, `Reboot Required` in
+  `--check`/`--dry-run` output only compared the running kernel against
+  what was already *installed* -- which is always a match before any
+  patching has happened, so it couldn't reveal that a newer kernel was
+  sitting in the repo waiting to be installed (e.g. visible via
+  `yum list kernel --showduplicates` but invisible to `aws-patch --check`).
+  Every pm module now implements an optional `pm_get_latest_available_kernel`
+  (`lib/apt.sh` via `apt-cache search`, `lib/yum.sh` via
+  `yum list available kernel --showduplicates`, `lib/dnf.sh` via
+  `dnf list available kernel`), and `lib/kernel.sh` gained
+  `kernel_get_latest_available` / `kernel_update_available` to compare it
+  against what's installed. Surfaced as a new `Available Kernel:` line in
+  the summary and a predictive warning ("A newer kernel is available but
+  not yet installed... will then require a reboot") whenever a live patch
+  run would install a newer kernel than what's currently on disk -- all
+  read-only, all before any packages are touched. No flag required.
+
+### Fixed
+- **Integration bug in the new predictive check itself, caught before
+  release:** `run_preflight` initially invoked kernel availability
+  detection only implicitly via `log_info "$(kernel_summary_line)")`. A
+  command substitution runs in a subshell, so the `KERNEL_LATEST_AVAILABLE`
+  variable set inside it was silently discarded and never reached
+  `summary_render` or the predictive warning, even though the console
+  line itself displayed the value correctly (making the bug easy to miss
+  by eyeballing output alone). Fixed by calling `kernel_update_available`
+  directly in `run_preflight` before building the summary line, so the
+  variable persists in the correct shell scope for the rest of the run.
+  A permanent regression test now asserts the variable itself survives
+  the full pre-flight sequence, not just the printed text.
+
 ## [1.2.0] - 2026-07-07
 
 ### Added
@@ -149,6 +183,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Never reboots unless `--reboot` is explicitly passed or the administrator
   interactively confirms.
 
+[1.3.0]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.3.0
 [1.2.0]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.2.0
 [1.1.0]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.1.0
 [1.0.1]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.0.1

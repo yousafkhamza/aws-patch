@@ -244,6 +244,13 @@ run_preflight() {
     fi
 
     kernel_reboot_required || true
+    # IMPORTANT: kernel_update_available must be called directly here, not
+    # only implicitly through `log_info "$(kernel_summary_line)"` below --
+    # a command substitution runs in a subshell, so any variable it sets
+    # (KERNEL_LATEST_AVAILABLE) would be silently lost and never reach
+    # summary_render. Calling it directly first ensures the global
+    # persists in this shell for the rest of the run.
+    kernel_update_available || true
     log_info "$(kernel_summary_line)"
 
     # Amazon Linux 2023 only: check whether a newer point-release snapshot
