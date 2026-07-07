@@ -299,13 +299,24 @@ echo "== lib/dnf.sh: AL2023 releasever detection =="
     # months 8, 10, 11, and 12, deliberately out of chronological order
     # in the listing (dnf lists 10/11/12 before 8) to verify sort -V
     # picks the true highest rather than the last-listed entry.
+    #
+    # IMPORTANT: the banner is written to STDERR (via `>&2`), not stdout.
+    # This reproduces the actual root cause of a real bug: the function
+    # previously used `2>/dev/null`, silently discarding this banner on
+    # every real AL2023 host, even though it was confirmed present via
+    # `dnf check-update kernel | head` (which only pipes stdout -- stderr
+    # passed through to the terminal untouched, which is why the banner
+    # was visible manually but invisible to aws-patch). Writing it to
+    # stdout here, as an earlier version of this test did, would not have
+    # caught that bug at all.
     OS_ID="amzn"
     OS_VERSION_ID="2023"
     # shellcheck disable=SC2317 # invoked indirectly via pm_check_releasever_update
     dnf() {
         case "$*" in
             *"check-update"*)
-                cat <<'BANNER'
+                {
+                    cat <<'BANNER'
 WARNING:
   A newer release of "Amazon Linux" is available.
 
@@ -374,6 +385,7 @@ WARNING:
   Version 2023.8.20250715:
     Run the following command to upgrade to 2023.8.20250715:
 BANNER
+                } >&2
                 return 100
                 ;;
             *"check-release-update --help"*) return 1 ;;
@@ -384,7 +396,7 @@ BANNER
 
     result="$(pm_check_releasever_update)"
     if [[ "$result" == "2023.12.20260629" ]]; then
-        echo "PASS: picks the true highest (2023.12.20260629) among 20 real-world versions via dnf check-update"
+        echo "PASS: picks the true highest (2023.12.20260629) among 20 real-world versions, banner on stderr"
     else
         echo "FAIL: expected 2023.12.20260629, got '${result}'"
     fi
@@ -411,14 +423,14 @@ BANNER
 
     # Case: "collect from anywhere" -- a bare `dnf check-update` prints
     # nothing useful, but `dnf check-update kernel` still carries the
-    # banner. Must still be found, since both sources (plus
+    # banner (on stderr). Must still be found, since both sources (plus
     # check-release-update) are collected unconditionally rather than
     # stopping at the first that responds.
     # shellcheck disable=SC2317 # invoked indirectly via pm_check_releasever_update
     dnf() {
         case "$*" in
             *"check-update kernel"*)
-                echo "  Version 2023.12.20260629:"
+                echo "  Version 2023.12.20260629:" >&2
                 return 100
                 ;;
             *"check-update"*)
@@ -432,7 +444,7 @@ BANNER
     export -f dnf
     result="$(pm_check_releasever_update)"
     if [[ "$result" == "2023.12.20260629" ]]; then
-        echo "PASS: pm_check_releasever_update finds data from check-update kernel when bare check-update has none"
+        echo "PASS: pm_check_releasever_update finds data from check-update kernel (stderr) when bare check-update has none"
     else
         echo "FAIL: expected 2023.12.20260629, got '${result}'"
     fi
@@ -656,6 +668,71 @@ while IFS= read -r line; do
     esac
 done < "/tmp/aws-patch-subshell-regression-$$.txt"
 rm -f "/tmp/aws-patch-subshell-regression-$$.txt"
+
+# ---------------------------------------------------------------------------
+# Section: interactive AL2023 release selection (_releasever_resolve_choice)
+#   Pure logic, no tty required -- verifies numeric selection, the
+#   empty-input default, and invalid-input fallback all resolve to the
+#   correct version string.
+# ---------------------------------------------------------------------------
+echo "== _releasever_resolve_choice (interactive release picker) =="
+
+(
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/lib/logger.sh"
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/lib/utils.sh"
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/lib/common.sh"
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/aws-patch.sh" 2>/dev/null || true
+
+    versions=("2023.8.20250707" "2023.10.20260105" "2023.11.20260526" "2023.12.20260629")
+    default="2023.12.20260629"
+
+    result="$(_releasever_resolve_choice "1" "$default" "${versions[@]}")"
+    if [[ "$result" == "2023.8.20250707" ]]; then
+        echo "PASS: choice 1 selects the lowest listed version"
+    else
+        echo "FAIL: choice 1 expected 2023.8.20250707, got '${result}'"
+    fi
+
+    result="$(_releasever_resolve_choice "3" "$default" "${versions[@]}")"
+    if [[ "$result" == "2023.11.20260526" ]]; then
+        echo "PASS: choice 3 selects the third listed version"
+    else
+        echo "FAIL: choice 3 expected 2023.11.20260526, got '${result}'"
+    fi
+
+    result="$(_releasever_resolve_choice "" "$default" "${versions[@]}")"
+    if [[ "$result" == "$default" ]]; then
+        echo "PASS: empty input (Enter pressed) defaults to the highest version"
+    else
+        echo "FAIL: empty input expected ${default}, got '${result}'"
+    fi
+
+    result="$(_releasever_resolve_choice "99" "$default" "${versions[@]}" 2>/dev/null)"
+    if [[ "$result" == "$default" ]]; then
+        echo "PASS: out-of-range choice falls back to the default (highest)"
+    else
+        echo "FAIL: out-of-range choice expected ${default}, got '${result}'"
+    fi
+
+    result="$(_releasever_resolve_choice "not-a-number" "$default" "${versions[@]}" 2>/dev/null)"
+    if [[ "$result" == "$default" ]]; then
+        echo "PASS: non-numeric choice falls back to the default (highest)"
+    else
+        echo "FAIL: non-numeric choice expected ${default}, got '${result}'"
+    fi
+) > /tmp/aws-patch-releasever-picker-test-$$.txt 2>&1
+
+while IFS= read -r line; do
+    case "$line" in
+        PASS:*) pass "${line#PASS: }" ;;
+        FAIL:*) fail "${line#FAIL: }" ;;
+    esac
+done < "/tmp/aws-patch-releasever-picker-test-$$.txt"
+rm -f "/tmp/aws-patch-releasever-picker-test-$$.txt"
 
 # ---------------------------------------------------------------------------
 # Section: attempt_broken_fix_and_retry (sourced from aws-patch.sh in

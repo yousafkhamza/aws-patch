@@ -75,13 +75,26 @@ sometimes including a newer kernel. A plain `dnf upgrade` only updates
 packages *within* the release currently pinned; it does not cross a
 point-release boundary on its own, which is why it can report "Nothing to
 do" even while the WARNING banner above it announces a newer snapshot.
+This mechanism is implemented by dnf's own `release-notification` plugin
+(visible in `dnf upgrade -v`'s plugin list), which is specific to Amazon
+Linux 2023's dnf-based tooling.
+
+**A note on why this was tricky to detect reliably:** the WARNING banner
+is printed on **stderr**, not stdout. A command like
+`dnf check-update kernel | head` still shows it because piping only
+redirects stdout -- stderr passes straight through to the terminal. Any
+automation that captures dnf's output with stderr discarded (e.g.
+`$(dnf check-update 2>/dev/null)`) will silently miss the banner
+entirely. `aws-patch` captures with `2>&1` specifically to avoid this.
 
 **Automatic resolution:** `aws-patch` detects this automatically on every
-run (no flag needed) by parsing the same banner `dnf` itself prints, and
-crosses the point-release boundary via `dnf upgrade -y --releasever=<version>`
-*before* running the normal full upgrade and kernel-metapackage step --
-so a kernel gated behind a newer release becomes reachable in the same
-run. You'll see this reflected in the summary output:
+run (no flag needed), collecting candidates from `dnf check-update`,
+`dnf check-update kernel`, and `dnf check-release-update` (when present),
+and crosses the point-release boundary via
+`dnf upgrade -y --releasever=<version>` *before* running the normal full
+upgrade and kernel-metapackage step -- so a kernel gated behind a newer
+release becomes reachable in the same run. You'll see this reflected in
+the summary output:
 
 ```
 == aws-patch Summary ==
@@ -99,12 +112,74 @@ and, during a live run:
 If nothing is announced (already on the latest point release), this step
 is a silent no-op -- and it's a no-op on every non-Amazon-Linux OS too.
 
+**Choosing which release to upgrade to:** if more than one point release
+is available, an interactive run (no `--yes`) lists all of them and asks
+which to use:
+
+```
+== Amazon Linux release update available ==
+ℹ Multiple Amazon Linux 2023 point releases are available:
+  1) 2023.8.20250707
+  2) 2023.10.20260105
+  3) 2023.11.20260526
+  4) 2023.12.20260629 (latest)
+Which release would you like to upgrade to? [1-4] (default: 4, 2023.12.20260629):
+```
+
+Press Enter to accept the default (the highest/latest). `--yes` always
+takes the highest automatically with no prompt.
+
+> **Note:** this prompt requires a real interactive terminal. Running
+> `aws-patch` via the one-line installer (`curl -fsSL <url> | sudo bash`)
+> feeds the pipe from `curl` into stdin for the whole script, so it isn't
+> a real terminal there -- the picker silently falls back to the highest
+> version in that invocation style, the same way the existing "Proceed
+> with patching?" confirmation already does. To get the interactive
+> picker, install first, then run the installed binary directly:
+> `sudo aws-patch` (no `--yes`).
+
+After a release upgrade is applied, `aws-patch` prints a reminder to run
+it again, since crossing a release boundary can newly expose packages
+(including a kernel) that weren't visible under the previous release:
+
+```
+== Amazon Linux release upgrade applied ==
+ℹ This run upgraded the Amazon Linux release to 2023.12.20260629.
+ℹ Run aws-patch again to pick up any kernel or package now available under this release
+ℹ that wasn't visible under the previous one.
+```
+
 **Manual resolution** (if you want to cross the boundary yourself first):
 
 ```bash
 sudo dnf upgrade --releasever=2023.12.20260629 -y
 sudo aws-patch --yes
 ```
+
+## Amazon Linux 2 (yum): is there an equivalent release-notification mechanism?
+
+**Short answer: no.** This was researched specifically, not assumed. The
+point-release/release-notification system described above is implemented
+by a dnf plugin (`release-notification`, part of `dnf-plugins-core`) that
+ships with Amazon Linux 2023's dnf-based tooling. Amazon Linux 2 uses
+yum, which has a different plugin architecture and does not ship this
+plugin -- and more fundamentally, AL2's package model is a single
+continuously-updated repository rather than AL2023's dated point-release
+snapshots, so there's no equivalent "newer snapshot available" concept
+for yum to announce in the first place. A plain `sudo yum update` (or
+`aws-patch` itself) already picks up everything AL2's repos currently
+offer, including new kernel builds -- there's no separate
+release-crossing step needed the way there is on AL2023. This is why
+`aws-patch` only implements `pm_check_releasever_update`/
+`pm_upgrade_releasever` for `lib/dnf.sh` and not `lib/yum.sh`; adding a
+fake equivalent for yum would just be generating output with no real
+mechanism behind it.
+
+What `aws-patch` **does** provide for Amazon Linux 2 (and every other
+supported OS) is the predictive kernel-availability check described
+below -- which answers a related but different question ("is there a
+newer kernel sitting in the repo, whether or not there's a whole release
+boundary involved") and works the same way on yum as it does on dnf.
 
 ## Unmet dependencies (`E: Unmet dependencies`, broken package state)
 

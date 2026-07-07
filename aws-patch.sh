@@ -83,6 +83,8 @@ VERBOSE="false"
 PATCH_STATUS="not_started"
 SECURITY_UPDATE_COUNT=0
 AL_RELEASEVER_UPDATE=""
+AL_RELEASEVER_UPDATES_LIST=""
+AL_RELEASEVER_UPGRADED=""
 
 # ---------------------------------------------------------------------------
 # usage / version
@@ -120,6 +122,11 @@ Safety:
   only repairs and reconfigures existing package state (e.g. dpkg --configure
   -a, apt --fix-broken install, yum-complete-transaction, dnf clean/retry);
   it never removes an installed kernel and never touches GRUB.
+
+Amazon Linux 2023:
+  When multiple point-release versions are available and the run is
+  interactive (no --yes), aws-patch lists them and lets you choose which
+  one to upgrade to; --yes always takes the highest automatically.
 
 Log file: ${AWS_PATCH_LOG_FILE}
 EOF
@@ -255,13 +262,18 @@ run_preflight() {
 
     # Amazon Linux 2023 only: check whether a newer point-release snapshot
     # is available. Read-only; safe to run even in --check/--dry-run.
+    AL_RELEASEVER_UPDATES_LIST=""
     if declare -F pm_check_releasever_update >/dev/null 2>&1; then
         AL_RELEASEVER_UPDATE="$(pm_check_releasever_update || true)"
         export AL_RELEASEVER_UPDATE
         if [[ -n "$AL_RELEASEVER_UPDATE" ]]; then
             log_info "Newer Amazon Linux release available: ${AL_RELEASEVER_UPDATE}"
+            if declare -F pm_list_releasever_updates >/dev/null 2>&1; then
+                AL_RELEASEVER_UPDATES_LIST="$(pm_list_releasever_updates || true)"
+            fi
         fi
     fi
+    export AL_RELEASEVER_UPDATES_LIST
 }
 
 # ---------------------------------------------------------------------------
@@ -337,6 +349,84 @@ attempt_broken_fix_and_retry() {
 }
 
 # ---------------------------------------------------------------------------
+# _releasever_resolve_choice <choice> <default_version> <version...>
+#   Pure logic, no I/O: given the administrator's raw input (possibly
+#   empty or invalid) and the ordered list of candidate versions, returns
+#   the selected version. Separated from prompt_releasever_selection so
+#   this logic is unit-testable without needing a real interactive
+#   terminal.
+# ---------------------------------------------------------------------------
+_releasever_resolve_choice() {
+    local choice="$1" default_version="$2"
+    shift 2
+    local -a versions=("$@")
+
+    if [[ -z "$choice" ]]; then
+        printf '%s' "$default_version"
+        return 0
+    fi
+
+    if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#versions[@]} )); then
+        printf '%s' "${versions[$((choice - 1))]}"
+    else
+        log_warn "Invalid selection '${choice}'; defaulting to the latest (${default_version})"
+        printf '%s' "$default_version"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# prompt_releasever_selection
+#   Amazon Linux 2023 only. When multiple point-release versions are
+#   detected (AL_RELEASEVER_UPDATES_LIST) and the run is interactive
+#   (--yes not passed, a real terminal is attached), presents a numbered
+#   list and lets the administrator choose which one to upgrade to,
+#   rather than always silently picking the highest. Echoes the selected
+#   version string. Falls back to the highest (AL_RELEASEVER_UPDATE)
+#   automatically when:
+#     - fewer than 2 distinct versions were found (nothing to choose between)
+#     - no interactive terminal is attached (stdin is not a tty)
+#     - the administrator just presses Enter (accepts the default)
+#     - the administrator enters something invalid (warns, then defaults)
+#   Never used at all when --yes is passed -- automation always gets the
+#   highest version with no prompt, matching every other --yes behavior
+#   in this script.
+# ---------------------------------------------------------------------------
+prompt_releasever_selection() {
+    local -a versions=()
+    local line
+
+    if [[ -n "${AL_RELEASEVER_UPDATES_LIST:-}" ]]; then
+        while IFS= read -r line; do
+            [[ -n "$line" ]] && versions+=("$line")
+        done <<< "$AL_RELEASEVER_UPDATES_LIST"
+    fi
+
+    if [[ "${#versions[@]}" -lt 2 || ! -t 0 ]]; then
+        printf '%s' "$AL_RELEASEVER_UPDATE"
+        return 0
+    fi
+
+    ui_header "Amazon Linux release update available"
+    log_info "Multiple Amazon Linux 2023 point releases are available:"
+
+    local i=1
+    local default_index="${#versions[@]}"
+    for line in "${versions[@]}"; do
+        if [[ "$line" == "$AL_RELEASEVER_UPDATE" ]]; then
+            printf '  %d) %s (latest)\n' "$i" "$line"
+        else
+            printf '  %d) %s\n' "$i" "$line"
+        fi
+        (( i++ ))
+    done
+
+    local choice
+    read -r -p "Which release would you like to upgrade to? [1-${#versions[@]}] (default: ${default_index}, ${AL_RELEASEVER_UPDATE}): " choice
+
+    _releasever_resolve_choice "$choice" "$AL_RELEASEVER_UPDATE" "${versions[@]}"
+}
+
+# ---------------------------------------------------------------------------
 # Patch execution
 # ---------------------------------------------------------------------------
 run_patch() {
@@ -368,17 +458,27 @@ run_patch() {
     # Amazon Linux 2023 only: cross a point-release boundary first if a
     # newer snapshot is available, since a newer kernel can be gated
     # behind it. Non-fatal if it fails -- the normal upgrade still
-    # proceeds against the currently pinned release.
+    # proceeds against the currently pinned release. In interactive runs
+    # (no --yes) with more than one candidate release, prompts the
+    # administrator to choose which one; --yes always takes the highest.
     if [[ -n "${AL_RELEASEVER_UPDATE:-}" ]] && declare -F pm_upgrade_releasever >/dev/null 2>&1; then
-        _al_releasever_retry_fn() { pm_upgrade_releasever "$AL_RELEASEVER_UPDATE"; }
+        local selected_releasever="$AL_RELEASEVER_UPDATE"
+        if [[ "$FLAG_YES" != "true" ]]; then
+            selected_releasever="$(prompt_releasever_selection)"
+        fi
 
-        ui_spinner_start "Upgrading Amazon Linux release to ${AL_RELEASEVER_UPDATE}"
-        if pm_upgrade_releasever "$AL_RELEASEVER_UPDATE"; then
+        _al_releasever_retry_fn() { pm_upgrade_releasever "$selected_releasever"; }
+
+        ui_spinner_start "Upgrading Amazon Linux release to ${selected_releasever}"
+        if pm_upgrade_releasever "$selected_releasever"; then
             ui_spinner_stop ok
+            AL_RELEASEVER_UPGRADED="$selected_releasever"
         else
             ui_spinner_stop fail
-            if ! attempt_broken_fix_and_retry "Upgrading Amazon Linux release to ${AL_RELEASEVER_UPDATE}" _al_releasever_retry_fn; then
-                log_warn "Failed to upgrade Amazon Linux release to ${AL_RELEASEVER_UPDATE}; continuing with current release"
+            if attempt_broken_fix_and_retry "Upgrading Amazon Linux release to ${selected_releasever}" _al_releasever_retry_fn; then
+                AL_RELEASEVER_UPGRADED="$selected_releasever"
+            else
+                log_warn "Failed to upgrade Amazon Linux release to ${selected_releasever}; continuing with current release"
             fi
         fi
     fi
@@ -491,6 +591,13 @@ main() {
     run_patch
     summary_render
     handle_reboot
+
+    if [[ -n "$AL_RELEASEVER_UPGRADED" ]]; then
+        ui_header "Amazon Linux release upgrade applied"
+        log_info "This run upgraded the Amazon Linux release to ${AL_RELEASEVER_UPGRADED}."
+        log_info "Run aws-patch again to pick up any kernel or package now available under this release"
+        log_info "that wasn't visible under the previous one."
+    fi
 }
 
 # Only auto-run when executed directly (not when sourced, e.g. by

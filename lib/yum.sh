@@ -174,7 +174,7 @@ pm_get_latest_available_kernel() {
     candidates="$(yum list kernel --showduplicates -q 2>/dev/null \
         | awk '/^kernel\.[a-zA-Z0-9_]+/ {print $2}' || true)"
     candidates+=$'\n'
-    candidates+="$(yum check-update kernel -q 2>/dev/null \
+    candidates+="$(yum check-update kernel -q 2>&1 \
         | awk '/^kernel\.[a-zA-Z0-9_]+/ {print $2}' || true)"
 
     ver="$(printf '%s\n' "$candidates" | grep -E '.' | sort -V | tail -n1 || true)"

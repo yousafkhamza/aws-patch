@@ -20,6 +20,7 @@
 #   pm_count_security_updates
 #   pm_fix_broken
 #   pm_check_releasever_update   (Amazon Linux 2023 only; no-op elsewhere)
+#   pm_list_releasever_updates   (Amazon Linux 2023 only; no-op elsewhere)
 #   pm_upgrade_releasever        (Amazon Linux 2023 only)
 
 set -Eeuo pipefail
@@ -101,27 +102,24 @@ pm_fix_broken() {
 }
 
 # ---------------------------------------------------------------------------
-# pm_check_releasever_update
-#   Amazon Linux 2023-specific. AL2023 ships periodic "point release"
-#   snapshots (e.g. 2023.12.20260629) that bundle a coordinated set of
-#   repo metadata -- including, sometimes, a newer kernel. A plain
-#   `dnf upgrade` does NOT cross a point-release boundary on its own; it
-#   only updates within the release currently pinned via /etc/dnf/vars or
-#   the distro default, which is why `dnf upgrade` can print "Nothing to
-#   do" while a newer AL2023 snapshot (and a newer kernel inside it) is
-#   available and announced in its own WARNING banner.
+# _dnf_collect_releasever_candidates
+#   Private helper (not part of the pm_* contract). Amazon Linux
+#   2023-specific. AL2023 ships periodic "point release" snapshots (e.g.
+#   2023.12.20260629) that bundle a coordinated set of repo metadata --
+#   including, sometimes, a newer kernel. A plain `dnf upgrade` does NOT
+#   cross a point-release boundary on its own; it only updates within the
+#   release currently pinned via /etc/dnf/vars or the distro default,
+#   which is why `dnf upgrade` can print "Nothing to do" while a newer
+#   AL2023 snapshot (and a newer kernel inside it) is available and
+#   announced in its own WARNING banner.
 #
-#   This function is read-only: it only detects whether a newer release
-#   is available and echoes its version string (e.g. "2023.12.20260629"),
-#   or prints nothing if already on the latest release. No-op (prints
-#   nothing) on every other OS.
-#
-#   Collects release-version candidates from every source below
-#   unconditionally (rather than stopping at the first that returns
-#   something), then picks the true highest across all of them --
-#   different AL2023 images/dnf versions surface this banner under
-#   different invocations, so the more sources checked, the less likely
-#   a real update is missed:
+#   Read-only: echoes every release-version candidate found (one per
+#   line, NOT deduplicated or sorted -- callers handle that), or nothing
+#   if none found / not on AL2023. Collects from every source below
+#   unconditionally rather than stopping at the first that returns
+#   something -- different AL2023 images/dnf versions surface this
+#   banner under different invocations, so the more sources checked, the
+#   less likely a real update is missed:
 #     1. `dnf check-update` -- read-only, safe to run anytime, and
 #        confirmed to reliably trigger the release-notification plugin's
 #        WARNING banner on a real AL2023 host. (`dnf upgrade --refresh
@@ -133,33 +131,67 @@ pm_fix_broken() {
 #        package is queried.
 #     3. `dnf check-release-update` -- a dedicated helper some AL2023
 #        images ship for exactly this check.
+#
+#   IMPORTANT: all three are captured with 2>&1, not 2>/dev/null. The
+#   release-notification plugin's WARNING banner is emitted on stderr,
+#   not stdout -- confirmed by the fact that a plain `dnf check-update
+#   kernel | head` (which only pipes stdout) still displays the banner
+#   on the terminal, since stderr passes through untouched. An earlier
+#   version of this function used 2>/dev/null and silently discarded the
+#   banner on every real host as a result, even though synthetic tests
+#   (which wrote the fake banner to stdout) never caught it.
 # ---------------------------------------------------------------------------
-pm_check_releasever_update() {
+_dnf_collect_releasever_candidates() {
     if [[ "${OS_ID:-}" != "amzn" || "${OS_VERSION_ID:-}" != 2023* ]]; then
         return 0
     fi
 
-    local candidates="" latest
+    local candidates=""
 
-    candidates+="$(dnf check-update 2>/dev/null \
+    candidates+="$(dnf check-update 2>&1 \
         | grep -Eo 'Version 2023\.[0-9]+\.[0-9]{8}:' \
         | grep -Eo '2023\.[0-9]+\.[0-9]{8}' || true)"
     candidates+=$'\n'
-    candidates+="$(dnf check-update kernel 2>/dev/null \
+    candidates+="$(dnf check-update kernel 2>&1 \
         | grep -Eo 'Version 2023\.[0-9]+\.[0-9]{8}:' \
         | grep -Eo '2023\.[0-9]+\.[0-9]{8}' || true)"
 
     if command -v dnf >/dev/null 2>&1 && dnf check-release-update --help >/dev/null 2>&1; then
         candidates+=$'\n'
-        candidates+="$(dnf check-release-update 2>/dev/null \
+        candidates+="$(dnf check-release-update 2>&1 \
             | grep -Eo '2023\.[0-9]+\.[0-9]{8}' || true)"
     fi
 
-    latest="$(printf '%s\n' "$candidates" | grep -E '^2023\.' | sort -V | tail -n1 || true)"
+    printf '%s\n' "$candidates" | grep -E '^2023\.'
+}
+
+# ---------------------------------------------------------------------------
+# pm_check_releasever_update
+#   This function is read-only: it only detects whether a newer release
+#   is available and echoes its version string (e.g. "2023.12.20260629"),
+#   or prints nothing if already on the latest release. No-op (prints
+#   nothing) on every other OS. Echoes the highest version found by
+#   _dnf_collect_releasever_candidates.
+# ---------------------------------------------------------------------------
+pm_check_releasever_update() {
+    local latest
+    latest="$(_dnf_collect_releasever_candidates | sort -V | tail -n1 || true)"
 
     if [[ -n "$latest" ]]; then
         printf '%s' "$latest"
     fi
+}
+
+# ---------------------------------------------------------------------------
+# pm_list_releasever_updates
+#   Read-only: echoes every distinct release-version candidate found,
+#   one per line, sorted ascending (lowest to highest). Empty output if
+#   none found / not on AL2023. Used to present a full list of available
+#   point releases (e.g. for interactive selection) rather than just the
+#   single highest version pm_check_releasever_update reports.
+# ---------------------------------------------------------------------------
+pm_list_releasever_updates() {
+    _dnf_collect_releasever_candidates | sort -Vu
 }
 
 # ---------------------------------------------------------------------------
@@ -231,7 +263,7 @@ pm_get_latest_available_kernel() {
     candidates+="$(dnf list kernel -q 2>/dev/null \
         | awk '/^kernel\.[a-zA-Z0-9_]+/ {print $2}' || true)"
     candidates+=$'\n'
-    candidates+="$(dnf check-update kernel -q 2>/dev/null \
+    candidates+="$(dnf check-update kernel -q 2>&1 \
         | awk '/^kernel\.[a-zA-Z0-9_]+/ {print $2}' || true)"
 
     ver="$(printf '%s\n' "$candidates" | grep -E '.' | sort -V | tail -n1 || true)"

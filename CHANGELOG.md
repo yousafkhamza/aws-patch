@@ -5,6 +5,63 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.5.0] - 2026-07-07
+
+### Fixed
+- **Critical: AL2023 release detection was discarding stderr, where the
+  banner actually lives.** `pm_check_releasever_update` captured `dnf
+  check-update`/`dnf check-update kernel`/`dnf check-release-update` with
+  `2>/dev/null`. The release-notification plugin's WARNING banner is
+  emitted on **stderr**, not stdout -- confirmed by the fact that
+  `dnf check-update kernel | head` (which only redirects stdout) still
+  displayed the banner on a real host, because stderr passed straight
+  through to the terminal. `2>/dev/null` was silently discarding it on
+  every single detection attempt, on every real AL2023 host, regardless
+  of which command variant was tried -- which is why v1.4.0's
+  "collect from every source" fix still produced no output. Fixed by
+  capturing with `2>&1` instead. Applied the same fix to the kernel
+  availability checks (`pm_get_latest_available_kernel` in both
+  `lib/yum.sh` and `lib/dnf.sh`) for consistency. Test fixtures updated
+  to emit their fake banners on stderr specifically, since the previous
+  stdout-based fakes could not have caught this class of bug.
+
+### Added
+- Interactive AL2023 release selection. When more than one point-release
+  version is detected and the run is interactive (no `--yes`, a real
+  terminal attached), `aws-patch` now lists every available version and
+  prompts the administrator to choose which one to upgrade to, instead
+  of always silently picking the highest:
+  ```
+  == Amazon Linux release update available ==
+  Multiple Amazon Linux 2023 point releases are available:
+    1) 2023.8.20250707
+    2) 2023.10.20260105
+    3) 2023.11.20260526
+    4) 2023.12.20260629 (latest)
+  Which release would you like to upgrade to? [1-4] (default: 4, ...):
+  ```
+  Falls back automatically to the highest version when: fewer than two
+  candidates exist, no interactive terminal is attached (including when
+  run via `curl | sudo bash`, since stdin is the installer's pipe in
+  that invocation style), the administrator presses Enter, or an invalid
+  selection is entered. `--yes` always takes the highest with no prompt.
+  New `pm_list_releasever_updates` (`lib/dnf.sh`) exposes the full
+  candidate list; the selection logic itself
+  (`_releasever_resolve_choice`) is factored out as pure, tty-independent
+  logic and covered by dedicated unit tests.
+- Closing reminder after a live release upgrade: `aws-patch` now prints
+  an explicit note to run it again, since crossing a release boundary can
+  expose packages (including a newer kernel) that weren't visible under
+  the previous release.
+- Documented, research-backed answer (not assumed) on whether Amazon
+  Linux 2 has an equivalent release-notification mechanism: it does not.
+  AL2023's point-release system is implemented by a dnf-specific
+  `release-notification` plugin that AL2's yum doesn't ship, and AL2's
+  package model doesn't have discrete dated snapshots the way AL2023
+  does -- a plain patch run on AL2 already surfaces everything available,
+  including new kernels, with no separate release-crossing step needed.
+  See `docs/troubleshooting.md` for the full explanation.
+
 ## [1.4.0] - 2026-07-07
 
 ### Changed
@@ -236,6 +293,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Never reboots unless `--reboot` is explicitly passed or the administrator
   interactively confirms.
 
+[1.5.0]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.5.0
 [1.4.0]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.4.0
 [1.3.1]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.3.1
 [1.3.0]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.3.0

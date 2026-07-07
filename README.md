@@ -498,8 +498,19 @@ commands) with a short backoff. See
 for manual resolution steps.
 
 **On Amazon Linux 2023, `dnf upgrade` shows a newer release is available but says "Nothing to do" -- does aws-patch handle that?**
-Yes, automatically, every run. See
+Yes, automatically, every run. If multiple point releases are available
+and you're running interactively (no `--yes`), you'll be asked which one
+to upgrade to. See
 [docs/troubleshooting.md](docs/troubleshooting.md#amazon-linux-2023-nothing-to-do-but-a-newer-releasekernel-is-announced).
+
+**Does Amazon Linux 2 have the same point-release mechanism?**
+No -- researched and confirmed, not assumed. AL2023's point-release
+system is implemented by a dnf-specific plugin that AL2's yum doesn't
+ship, and AL2's package model doesn't have discrete dated snapshots the
+way AL2023 does. A plain patch run on AL2 already picks up everything
+available, including new kernels -- see
+[docs/troubleshooting.md](docs/troubleshooting.md#amazon-linux-2-yum-is-there-an-equivalent-release-notification-mechanism)
+for the full explanation.
 
 ## Contributing
 
