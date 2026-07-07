@@ -135,6 +135,32 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Regression test: common_retry must propagate the real exit code of a
+# command that fails on every attempt. A prior bug captured "$?" *after*
+# a bare `if cmd; then ...; fi` with no else clause, which is always 0
+# per POSIX semantics when the condition is false -- silently masking
+# every failure across every pm_* operation that uses common_retry.
+# ---------------------------------------------------------------------------
+echo "== lib/common.sh: common_retry regression =="
+
+_regression_fake_fail() { return 100; }
+
+set +e
+common_retry 2 0 -- _regression_fake_fail >/dev/null 2>&1
+retry_rc=$?
+set -e
+assert_eq "$retry_rc" "100" "common_retry propagates real exit code (100) after exhausting retries"
+
+_regression_fake_succeed_on_second_try() {
+    _regression_attempt_count="${_regression_attempt_count:-0}"
+    _regression_attempt_count=$((_regression_attempt_count + 1))
+    [[ "$_regression_attempt_count" -ge 2 ]]
+}
+_regression_attempt_count=0
+assert_success "common_retry succeeds once the command succeeds within max_attempts" \
+    common_retry 3 0 -- _regression_fake_succeed_on_second_try
+
+# ---------------------------------------------------------------------------
 # Section: lib/kernel.sh (using a fake pm_get_installed_kernels, no real pm)
 # ---------------------------------------------------------------------------
 echo "== lib/kernel.sh =="

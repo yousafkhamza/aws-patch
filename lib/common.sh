@@ -226,6 +226,22 @@ common_check_disk_space() {
 #   Example:
 #     common_retry 3 5 -- apt-get update
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# common_retry <max_attempts> <sleep_seconds> -- <command...>
+#   Retries a command on failure with a fixed delay between attempts.
+#   Intended for transient network/package-repo failures.
+#
+#   The command's own stdout/stderr are captured to a temp file rather than
+#   left to print directly to the terminal. This prevents package-manager
+#   output (e.g. apt-get's own progress lines) from interleaving with the
+#   \r-based spinner and producing garbled console output. Captured output
+#   is always appended to the log file; on final failure it is additionally
+#   printed to the console so the operator sees the real error immediately,
+#   without needing to open the log file separately.
+#
+#   Example:
+#     common_retry 3 5 -- apt-get update
+# ---------------------------------------------------------------------------
 common_retry() {
     local max_attempts="${1:?max_attempts required}"
     local sleep_seconds="${2:?sleep_seconds required}"
@@ -239,19 +255,46 @@ common_retry() {
 
     local attempt=1
     local rc=0
+    local out_file
+    out_file="$(mktemp "${TMPDIR:-/tmp}/aws-patch-cmd.XXXXXX" 2>/dev/null || echo "/tmp/aws-patch-cmd.$$")"
 
     while (( attempt <= max_attempts )); do
-        if "$@"; then
+        # IMPORTANT: rc must be captured inside the else clause. A bare
+        # `if cmd; then ...; fi` with no else has an exit status of 0 when
+        # the condition is false (POSIX-defined behavior), so capturing
+        # "$?" *after* the fi always reads 0 -- silently masking every
+        # failure. Capturing it here, still inside the conditional, is the
+        # only place the real exit code of "$@" is guaranteed valid.
+        if "$@" >"$out_file" 2>&1; then
+            {
+                echo "---- command output (attempt ${attempt}, succeeded): $* ----"
+                cat "$out_file"
+            } >> "$AWS_PATCH_LOG_FILE" 2>/dev/null || true
+            rm -f "$out_file" 2>/dev/null || true
             return 0
+        else
+            rc=$?
         fi
-        rc=$?
-        log_warn "Command failed (attempt ${attempt}/${max_attempts}): $*"
+
+        {
+            echo "---- command output (attempt ${attempt}, exit ${rc}): $* ----"
+            cat "$out_file"
+        } >> "$AWS_PATCH_LOG_FILE" 2>/dev/null || true
+
+        log_warn "Command failed (attempt ${attempt}/${max_attempts}, exit ${rc}): $*"
         if (( attempt < max_attempts )); then
             sleep "$sleep_seconds"
         fi
         (( attempt++ ))
     done
 
-    log_error "Command failed after ${max_attempts} attempts: $*"
+    log_error "Command failed after ${max_attempts} attempts (exit ${rc}): $*"
+    if [[ -s "$out_file" ]]; then
+        printf '%b---- last command output ----%b\n' "$C_DIM" "$C_RESET"
+        cat "$out_file"
+        printf '%b------------------------------%b\n' "$C_DIM" "$C_RESET"
+    fi
+    rm -f "$out_file" 2>/dev/null || true
+
     return "$rc"
 }

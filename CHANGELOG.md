@@ -5,6 +5,33 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.0.1] - 2026-07-07
+
+### Fixed
+- **Critical:** `common_retry` (`lib/common.sh`) always reported success
+  after exhausting all retry attempts, regardless of whether the
+  underlying command actually succeeded. The bug: `rc=$?` was read
+  *after* a bare `if cmd; then ...; fi` with no `else` clause. Per POSIX
+  semantics, such an `if` statement's own exit status is `0` when the
+  condition is false and no branch runs -- so `rc` was silently always
+  `0` on the final failing attempt, and `common_retry` (and therefore
+  every `pm_update_repos`, `pm_upgrade`, `pm_full_upgrade`,
+  `pm_security_only`, and `pm_install_kernel_meta` call across
+  apt/yum/dnf) would return success even after real, exhausted failures.
+  In practice this meant a genuinely failed `apt-get full-upgrade` (e.g.
+  due to unmet kernel package dependencies) could still be reported as
+  `Patch Status: completed`. Fixed by capturing the exit code inside an
+  `else` clause, where it is still valid. A permanent regression test
+  (`tests/run_tests.sh`) now asserts `common_retry` propagates the real
+  exit code after exhausting retries.
+- Command output from retried operations (e.g. `apt-get`'s own progress
+  and error output) is now captured to a temp file and appended to the
+  log instead of streaming directly to the terminal, which previously
+  interleaved with the `\r`-based spinner and produced garbled console
+  output. On final failure, the captured output is printed to the
+  console in a clearly delimited block so the operator can immediately
+  see the real underlying error without opening the log file.
+
 ## [1.0.0] - 2026-07-07
 
 ### Added
@@ -51,4 +78,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Never reboots unless `--reboot` is explicitly passed or the administrator
   interactively confirms.
 
+[1.0.1]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.0.1
 [1.0.0]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.0.0
