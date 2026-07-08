@@ -92,6 +92,36 @@ The installer:
 - Executes `aws-patch.sh` immediately after install, forwarding your
   arguments
 
+### Package install (.deb / .rpm)
+
+Every [GitHub Release](https://github.com/yousafkhamza/aws-patch/releases)
+includes a `.deb` and a `.rpm`, built and published automatically by CI
+when a version tag is pushed.
+
+**Debian/Ubuntu:**
+
+```bash
+curl -fsSLO https://github.com/yousafkhamza/aws-patch/releases/latest/download/aws-patch_1.5.0_all.deb
+sudo dpkg -i aws-patch_1.5.0_all.deb
+```
+
+**RHEL/Amazon Linux/Rocky/AlmaLinux/CentOS:**
+
+```bash
+curl -fsSLO https://github.com/yousafkhamza/aws-patch/releases/latest/download/aws-patch-1.5.0-1.noarch.rpm
+sudo rpm -i aws-patch-1.5.0-1.noarch.rpm
+```
+
+(Check the [releases page](https://github.com/yousafkhamza/aws-patch/releases)
+for the exact current filename/version.) Every release also publishes a
+`SHA256SUMS` file — verify with `sha256sum -c SHA256SUMS` before
+installing if you want to confirm integrity.
+
+Once installed, `aws-patch` is on `PATH` and `man aws-patch` works.
+Upgrading to a new version means downloading and installing the new
+package the same way; there's no repository/`apt update` integration
+(see the FAQ below for why).
+
 ### Manual install
 
 ```bash
@@ -512,6 +542,15 @@ available, including new kernels -- see
 [docs/troubleshooting.md](docs/troubleshooting.md#amazon-linux-2-yum-is-there-an-equivalent-release-notification-mechanism)
 for the full explanation.
 
+**Why isn't there a real `apt`/`yum` repository (`apt install aws-patch` with auto-updates)?**
+That needs signed packages (a GPG key and its whole trust/rotation
+story) plus hosted, generated repo metadata (`Packages.gz`/`Release` for
+APT, `createrepo` output for DNF/YUM) -- meaningfully more moving parts
+than downloading a `.deb`/`.rpm` from a release. The current model
+(build both formats in CI, attach to each GitHub Release, verify with
+`SHA256SUMS`) covers "install a specific version with one command" without
+that overhead. A full repo is a reasonable future step if there's demand.
+
 ## Contributing
 
 Contributions are welcome. Please:
@@ -525,6 +564,37 @@ Contributions are welcome. Please:
    automatic reboots outside the existing `--reboot` flag.
 
 See [CHANGELOG.md](CHANGELOG.md) for release history.
+
+### Release process (maintainers)
+
+1. Bump the `VERSION` file (semver: `X.Y.Z`) and add a matching entry at
+   the top of `CHANGELOG.md` (`## [X.Y.Z] - YYYY-MM-DD`) — the release
+   notes are generated directly from this section.
+2. Commit, then tag and push:
+   ```bash
+   git tag vX.Y.Z
+   git push origin vX.Y.Z
+   ```
+3. Pushing the tag triggers `.github/workflows/release.yml`, which:
+   - Re-runs the full lint/test suite (`bash -n`, ShellCheck,
+     `tests/run_tests.sh`) as a hard gate
+   - Verifies the `VERSION` file matches the pushed tag (fails the
+     release if they've drifted)
+   - Builds `.deb` and `.rpm` packages via `scripts/build-packages.sh`
+     (uses [fpm](https://github.com/jordansissel/fpm))
+   - Builds a source tarball and `SHA256SUMS`
+   - Publishes a GitHub Release with all of the above attached and
+     release notes pulled from `CHANGELOG.md`
+
+To build packages locally without pushing a tag (e.g. to sanity-check
+before a release):
+
+```bash
+sudo apt-get install -y rpm ruby ruby-dev build-essential
+sudo gem install --no-document fpm
+./scripts/build-packages.sh
+# outputs to dist/
+```
 
 ## License
 

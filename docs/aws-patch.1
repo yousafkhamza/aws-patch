@@ -1,0 +1,110 @@
+.TH AWS-PATCH 1 "2026-07-07" "aws-patch" "User Commands"
+.SH NAME
+aws-patch \- production-grade Linux patch automation for AWS EC2
+.SH SYNOPSIS
+.B aws-patch
+[\fIOPTIONS\fR]
+.SH DESCRIPTION
+.B aws-patch
+detects the host's operating system and package manager, applies
+package updates safely, reports whether a reboot is required (both for
+what's already installed and, where supported, what's available in the
+repo but not yet installed), and never modifies the bootloader or
+removes an installed kernel.
+.PP
+Supported distributions: Ubuntu 20.04/22.04/24.04, Debian 11/12, Amazon
+Linux 2, Amazon Linux 2023, RHEL 7/8/9, Rocky Linux, AlmaLinux, and
+CentOS 7. The package manager (apt, yum, or dnf) is auto-detected.
+.SH OPTIONS
+.TP
+.B \-\-check
+Report system, kernel, and patch status only. Installs nothing. Does
+not require root.
+.TP
+.B \-\-dry\-run
+Show what would be done without making any changes. Requires root.
+.TP
+.B \-\-reboot
+Automatically reboot if a reboot is required after patching. Without
+this flag, a required reboot is only reported, never performed
+automatically.
+.TP
+.B \-\-yes
+Assume "yes" for any interactive prompts, for non-interactive /
+automation use (cron, SSM Run Command, CI pipelines, etc).
+.TP
+.B \-\-broken\-fix
+If a package operation fails after exhausting its normal retries,
+automatically run a distro-appropriate repair routine (e.g.
+.BR "apt \-\-fix\-broken install" ,
+.BR yum\-complete\-transaction ,
+dnf cache cleanup) and retry once before giving up.
+.TP
+.B \-\-verbose
+Enable debug-level console output.
+.TP
+.B \-\-version
+Print the installed version and exit.
+.TP
+.B \-\-help
+Print usage information and exit.
+.SH SAFETY GUARANTEES
+.B aws-patch
+never removes an installed kernel package, never modifies GRUB or any
+bootloader configuration, never changes the default boot entry, and
+never reboots the system unless
+.B \-\-reboot
+is explicitly passed or the administrator confirms interactively.
+.SH FILES
+.TP
+.I /var/log/aws-patch.log
+Timestamped log of every run. Falls back to
+.I /tmp/aws-patch-<uid>.log
+if that path is not writable.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+Generic failure (e.g. a package operation failed and could not be
+recovered).
+.TP
+.B 2
+Invalid usage or unrecognized argument.
+.TP
+.B 3
+Unsupported operating system or package manager.
+.TP
+.B 4
+A pre-flight check (connectivity or disk space) failed and the
+administrator declined to continue.
+.TP
+.B 77
+Not running as root when root is required.
+.SH EXAMPLES
+.TP
+Check status only, no changes:
+.B sudo aws-patch \-\-check
+.TP
+Preview what a live run would do:
+.B sudo aws-patch \-\-dry\-run
+.TP
+Unattended patch, leave reboot decision to a human:
+.B sudo aws-patch \-\-yes
+.TP
+Fully unattended patch, including reboot if required:
+.B sudo aws-patch \-\-yes \-\-reboot
+.SH SEE ALSO
+Full documentation, troubleshooting guide, and AWS recovery guidance are
+installed at
+.IR /usr/share/doc/aws-patch/ ,
+and online at
+.UR https://github.com/yousafkhamza/aws-patch
+.UE .
+.SH AUTHOR
+yousafkhamza
+.UR https://github.com/yousafkhamza/aws-patch
+.UE
+.SH LICENSE
+MIT

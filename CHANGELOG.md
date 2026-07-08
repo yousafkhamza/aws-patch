@@ -5,6 +5,38 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.6.0] - 2026-07-07
+
+### Added
+- `.deb` and `.rpm` packaging via `scripts/build-packages.sh` (built with
+  [fpm](https://github.com/jordansissel/fpm)). Installs to an
+  FHS-compliant layout (`/usr/lib/aws-patch/`, symlinked from
+  `/usr/bin/aws-patch`) independent of `install.sh`'s `/opt/aws-patch`
+  layout; `aws-patch.sh`'s existing symlink-resolution logic was verified
+  to correctly locate `lib/*.sh` either way.
+- `docs/aws-patch.1` man page, installed as part of both packages
+  (`man aws-patch` after installing via `.deb`/`.rpm`).
+- New GitHub Actions release pipeline
+  (`.github/workflows/release.yml`), triggered on pushing a `vX.Y.Z` tag
+  (or manually via `workflow_dispatch`):
+  1. Re-runs the full lint/test suite (`bash -n`, ShellCheck,
+     `tests/run_tests.sh`) as a hard gate before anything is built.
+  2. Verifies the `VERSION` file matches the pushed tag; fails the
+     release rather than publishing a mismatched version.
+  3. Builds `.deb` and `.rpm` packages, a source tarball, and a
+     `SHA256SUMS` checksum file.
+  4. Publishes a GitHub Release with all artifacts attached and release
+     notes extracted directly from the matching `CHANGELOG.md` section,
+     plus generated install-command snippets for both package formats
+     and the existing one-line installer.
+- `.github/workflows/shellcheck.yml` (the existing push/PR lint
+  workflow) now also covers `scripts/*.sh`.
+- README: new "Package install (.deb / .rpm)" section, a "Release
+  process (maintainers)" section documenting the tag-to-release flow,
+  and an FAQ entry explaining the deliberate choice of downloadable
+  packages over a full signed `apt`/`yum` repository (and what that
+  larger step would require, if ever pursued).
+
 ## [1.5.0] - 2026-07-07
 
 ### Fixed
@@ -293,6 +325,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Never reboots unless `--reboot` is explicitly passed or the administrator
   interactively confirms.
 
+[1.6.0]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.6.0
 [1.5.0]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.5.0
 [1.4.0]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.4.0
 [1.3.1]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.3.1

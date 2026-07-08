@@ -1,0 +1,184 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re-)release, e.g. v1.6.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  # ---------------------------------------------------------------------
+  # Gate: the same lint/test suite as the regular ShellCheck workflow.
+  # A release never proceeds if this fails.
+  # ---------------------------------------------------------------------
+  test:
+    name: Lint & Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Install ShellCheck
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y shellcheck
+
+      - name: Syntax check (bash -n)
+        run: |
+          set -e
+          fail=0
+          for f in aws-patch.sh install.sh lib/*.sh tests/*.sh scripts/*.sh; do
+            [ -e "$f" ] || continue
+            echo "Checking syntax: $f"
+            if ! bash -n "$f"; then
+              echo "::error file=$f::bash -n failed"
+              fail=1
+            fi
+          done
+          exit "$fail"
+
+      - name: ShellCheck
+        run: shellcheck -x aws-patch.sh install.sh lib/*.sh tests/*.sh scripts/*.sh
+
+      - name: Run test suite
+        run: ./tests/run_tests.sh
+
+      - name: Verify VERSION matches the tag being released
+        run: |
+          ref_name="${{ inputs.tag || github.ref_name }}"
+          tag_version="${ref_name#v}"
+          file_version="$(cat VERSION)"
+          if [[ "$tag_version" != "$file_version" ]]; then
+            echo "::error::Tag ${ref_name} does not match VERSION file (${file_version})."
+            echo "::error::Update the VERSION file to ${tag_version} (or retag) before releasing."
+            exit 1
+          fi
+          echo "VERSION file matches tag: ${file_version}"
+
+  # ---------------------------------------------------------------------
+  # Build .deb, .rpm, and a source tarball; upload as workflow artifacts
+  # for the release job to pick up.
+  # ---------------------------------------------------------------------
+  build:
+    name: Build packages
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Install packaging tools (fpm + rpmbuild)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y rpm ruby ruby-dev build-essential
+          sudo gem install --no-document fpm
+
+      - name: Build .deb and .rpm packages
+        run: |
+          chmod +x scripts/build-packages.sh
+          ./scripts/build-packages.sh
+
+      - name: Build source tarball
+        run: |
+          version="$(cat VERSION)"
+          git archive --format=tar.gz \
+            --prefix="aws-patch-v${version}/" \
+            -o "dist/aws-patch-v${version}.tar.gz" \
+            HEAD
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: dist/*
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------
+  # Create the GitHub Release itself, attaching every built artifact and
+  # the matching section of CHANGELOG.md as release notes.
+  # ---------------------------------------------------------------------
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: packages
+          path: dist
+
+      - name: Extract this version's CHANGELOG section
+        run: |
+          version="$(cat VERSION)"
+          awk -v marker="## [${version}]" '
+            $0 ~ /^## \[/ {
+              if (found) exit
+              if (index($0, marker) == 1) { found = 1; next }
+            }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+
+          if [[ ! -s release-notes.md ]]; then
+            echo "No matching CHANGELOG section found for ${version}; using a minimal note." >&2
+            echo "See CHANGELOG.md for details." > release-notes.md
+          fi
+
+          {
+            echo ""
+            echo "---"
+            echo ""
+            echo "### Install"
+            echo ""
+            echo "**Debian/Ubuntu:**"
+            echo '```bash'
+            echo "curl -fsSLO https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag || github.ref_name }}/aws-patch_${version}_all.deb"
+            echo "sudo dpkg -i aws-patch_${version}_all.deb"
+            echo '```'
+            echo ""
+            echo "**RHEL/Amazon Linux/Rocky/AlmaLinux:**"
+            echo '```bash'
+            echo "curl -fsSLO https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag || github.ref_name }}/aws-patch-${version}-1.noarch.rpm"
+            echo "sudo rpm -i aws-patch-${version}-1.noarch.rpm"
+            echo '```'
+            echo ""
+            echo "**One-line installer (any supported OS):**"
+            echo '```bash'
+            echo "curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | sudo bash"
+            echo '```'
+            echo ""
+            echo "Verify downloads against \`SHA256SUMS\` in this release."
+          } >> release-notes.md
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ inputs.tag || github.ref_name }}"
+          gh release create "$tag" \
+            --repo "${{ github.repository }}" \
+            --title "aws-patch ${tag}" \
+            --notes-file release-notes.md \
+            dist/*.deb dist/*.rpm dist/*.tar.gz dist/SHA256SUMS

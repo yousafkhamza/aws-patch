@@ -24,7 +24,7 @@ jobs:
         run: |
           set -e
           fail=0
-          for f in aws-patch.sh install.sh lib/*.sh tests/*.sh; do
+          for f in aws-patch.sh install.sh lib/*.sh tests/*.sh scripts/*.sh; do
             [ -e "$f" ] || continue
             echo "Checking syntax: $f"
             if ! bash -n "$f"; then
@@ -36,7 +36,7 @@ jobs:
 
       - name: ShellCheck
         run: |
-          shellcheck -x aws-patch.sh install.sh lib/*.sh tests/*.sh
+          shellcheck -x aws-patch.sh install.sh lib/*.sh tests/*.sh scripts/*.sh
 
       - name: Verify VERSION file is valid semver
         run: |
