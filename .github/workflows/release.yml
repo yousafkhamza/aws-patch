@@ -32,6 +32,14 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y shellcheck
 
+      - name: Ensure scripts are executable
+        # A checkout can lose the +x bit depending on how the repo's
+        # history was populated (e.g. files added without the mode set).
+        # This is defense in depth; the steps below also avoid depending
+        # on +x at all by invoking scripts via `bash <script>` rather
+        # than `./<script>`.
+        run: chmod +x aws-patch.sh install.sh lib/*.sh tests/*.sh scripts/*.sh
+
       - name: Syntax check (bash -n)
         run: |
           set -e
@@ -50,7 +58,7 @@ jobs:
         run: shellcheck -x aws-patch.sh install.sh lib/*.sh tests/*.sh scripts/*.sh
 
       - name: Run test suite
-        run: ./tests/run_tests.sh
+        run: bash tests/run_tests.sh
 
       - name: Verify VERSION matches the tag being released
         run: |
@@ -85,9 +93,7 @@ jobs:
           sudo gem install --no-document fpm
 
       - name: Build .deb and .rpm packages
-        run: |
-          chmod +x scripts/build-packages.sh
-          ./scripts/build-packages.sh
+        run: bash scripts/build-packages.sh
 
       - name: Build source tarball
         run: |

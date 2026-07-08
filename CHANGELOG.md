@@ -5,6 +5,25 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.6.1] - 2026-07-08
+
+### Fixed
+- `.github/workflows/release.yml`'s "Run test suite" and "Build .deb and
+  .rpm packages" steps invoked `./tests/run_tests.sh` and
+  `./scripts/build-packages.sh` directly, which depend on the
+  executable bit surviving into the GitHub Actions checkout. On the
+  first real run this failed with `Permission denied` (exit 126) --
+  the bit hadn't survived however the repository's history was
+  populated. Fixed by invoking both via explicit `bash <script>` instead
+  of direct execution, which only requires the file to be readable, plus
+  an added `chmod +x` step as defense in depth. Also hardened
+  `tests/run_tests.sh` itself: it previously invoked `aws-patch.sh`
+  directly in several places (`"${REPO_ROOT}/aws-patch.sh" --version`,
+  etc.), which would hit the identical failure mode in any checkout
+  missing the bit; switched to `bash "${REPO_ROOT}/aws-patch.sh"`
+  throughout. Verified by stripping every executable bit in the repo
+  and confirming `bash tests/run_tests.sh` still passes all 51 tests.
+
 ## [1.6.0] - 2026-07-07
 
 ### Added
@@ -325,6 +344,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Never reboots unless `--reboot` is explicitly passed or the administrator
   interactively confirms.
 
+[1.6.1]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.6.1
 [1.6.0]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.6.0
 [1.5.0]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.5.0
 [1.4.0]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.4.0

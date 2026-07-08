@@ -209,17 +209,23 @@ fi
 
 # ---------------------------------------------------------------------------
 # Section: aws-patch.sh CLI behavior (no root required for these flags)
+#
+# Invoked via `bash "${REPO_ROOT}/aws-patch.sh"` rather than direct
+# execution (`"${REPO_ROOT}/aws-patch.sh"`) throughout this section
+# deliberately: direct execution requires the file's executable bit,
+# which isn't guaranteed to survive every checkout/clone method. Explicit
+# `bash` invocation only requires the file to be readable.
 # ---------------------------------------------------------------------------
 echo "== aws-patch.sh CLI =="
 
-version_output="$("${REPO_ROOT}/aws-patch.sh" --version)"
+version_output="$(bash "${REPO_ROOT}/aws-patch.sh" --version)"
 if [[ "$version_output" == aws-patch\ v* ]]; then
     pass "aws-patch.sh --version prints version string ('$version_output')"
 else
     fail "aws-patch.sh --version unexpected output: '$version_output'"
 fi
 
-help_output="$("${REPO_ROOT}/aws-patch.sh" --help)"
+help_output="$(bash "${REPO_ROOT}/aws-patch.sh" --help)"
 if [[ "$help_output" == *"--check"* && "$help_output" == *"--reboot"* ]]; then
     pass "aws-patch.sh --help lists expected flags"
 else
@@ -227,7 +233,7 @@ else
 fi
 
 if NO_COLOR=1 AWS_PATCH_LOG_FILE="/tmp/aws-patch-test-$$.log" \
-    "${REPO_ROOT}/aws-patch.sh" --check >/tmp/aws-patch-check-output-$$.txt 2>&1; then
+    bash "${REPO_ROOT}/aws-patch.sh" --check >/tmp/aws-patch-check-output-$$.txt 2>&1; then
     pass "aws-patch.sh --check exits 0 without root/network"
 else
     fail "aws-patch.sh --check exited non-zero"
@@ -241,12 +247,12 @@ fi
 rm -f "/tmp/aws-patch-check-output-$$.txt" "/tmp/aws-patch-test-$$.log"
 
 set +e
-"${REPO_ROOT}/aws-patch.sh" --totally-not-a-real-flag >/dev/null 2>&1
+bash "${REPO_ROOT}/aws-patch.sh" --totally-not-a-real-flag >/dev/null 2>&1
 rc=$?
 set -e
 assert_eq "$rc" "2" "aws-patch.sh rejects unknown flags with exit code 2"
 
-if help_output="$("${REPO_ROOT}/aws-patch.sh" --help)" && [[ "$help_output" == *"--broken-fix"* ]]; then
+if help_output="$(bash "${REPO_ROOT}/aws-patch.sh" --help)" && [[ "$help_output" == *"--broken-fix"* ]]; then
     pass "aws-patch.sh --help documents --broken-fix"
 else
     fail "aws-patch.sh --help does not mention --broken-fix"
