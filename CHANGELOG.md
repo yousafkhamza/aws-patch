@@ -5,6 +5,14 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.7.1] - 2026-07-09
+
+### Changed
+- `docs/index.html` footer restyled to: `Built by Yousaf Hamza · ©
+  <year> aws-patch. All rights reserved. · Source on GitHub`, with the
+  copyright year set client-side via JavaScript so it never goes stale,
+  and the "Source on GitHub" link pointing at the actual repo URL.
+
 ## [1.7.0] - 2026-07-08
 
 ### Added
@@ -369,6 +377,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Never reboots unless `--reboot` is explicitly passed or the administrator
   interactively confirms.
 
+[1.7.1]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.7.1
 [1.7.0]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.7.0
 [1.6.1]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.6.1
 [1.6.0]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.6.0

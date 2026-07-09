@@ -181,7 +181,14 @@
   }
   footer a { color: var(--accent); text-decoration: none; }
   footer a:hover { text-decoration: underline; }
-  .watermark { margin-top: 8px; font-size: 12px; opacity: 0.6; letter-spacing: 0.03em; }
+  .footer-row {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .footer-row .dot { opacity: 0.5; }
 </style>
 </head>
 <body>
@@ -257,15 +264,16 @@
   </section>
 
   <footer>
-    <div>
-      <a href="https://github.com/yousafkhamza/aws-patch" target="_blank" rel="noopener">github.com/yousafkhamza/aws-patch</a>
-      · MIT License · Built for real production EC2 fleets
+    <div class="footer-row">
+      <span>Built by Yousaf Hamza</span>
+      <span class="dot">·</span>
+      <span>&copy; <span id="footer-year">2026</span> aws-patch. All rights reserved.</span>
+      <span class="dot">·</span>
+      <a href="https://github.com/yousafkhamza/aws-patch" target="_blank" rel="noopener">Source on GitHub</a>
     </div>
-    <div class="watermark">Created by Yousaf Hamza</div>
   </footer>
 
 </div>
-
 <script>
   var REPO = "yousafkhamza/aws-patch";
 
@@ -358,6 +366,9 @@
       setTimeout(function () { btn.textContent = original; }, 1500);
     });
   });
+
+  var yearEl = document.getElementById("footer-year");
+  if (yearEl) { yearEl.textContent = new Date().getFullYear(); }
 
   loadLatestRelease();
 </script>
