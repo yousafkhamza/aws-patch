@@ -7,6 +7,7 @@ installed kernels.
 
 [![ShellCheck](https://github.com/yousafkhamza/aws-patch/actions/workflows/shellcheck.yml/badge.svg)](.github/workflows/shellcheck.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Website](https://img.shields.io/badge/site-yousafkhamza.github.io%2Faws--patch-ff9900)](https://yousafkhamza.github.io/aws-patch/)
 
 ## Why aws-patch
 
@@ -595,6 +596,35 @@ sudo gem install --no-document fpm
 ./scripts/build-packages.sh
 # outputs to dist/
 ```
+
+### Project site (GitHub Pages)
+
+[yousafkhamza.github.io/aws-patch](https://yousafkhamza.github.io/aws-patch/)
+is a static landing page at `docs/index.html`. It fetches the latest
+release directly from the GitHub API at load time (`GET
+/repos/yousafkhamza/aws-patch/releases/latest`), so it always reflects
+whatever was most recently published — nothing to update by hand when a
+new version ships.
+
+**One-time setup** (repository owner, via the GitHub web UI):
+
+1. Go to **Settings → Pages**.
+2. Under **Build and deployment → Source**, choose **Deploy from a
+   branch**.
+3. Set **Branch** to `main` and the folder to **`/docs`**, then **Save**.
+4. GitHub publishes the site within a minute or two at
+   `https://yousafkhamza.github.io/aws-patch/`.
+
+`docs/.nojekyll` is already present, which tells GitHub Pages to serve
+files as-is rather than running them through Jekyll — needed since
+`docs/` also holds the plain Markdown troubleshooting/recovery guides
+and the man page source, which aren't meant to be built as a Jekyll
+site.
+
+If the API call fails (e.g. hourly rate limit from an unauthenticated
+client), the page falls back to a direct link to the
+[Releases page](https://github.com/yousafkhamza/aws-patch/releases)
+rather than showing a broken UI.
 
 ## License
 

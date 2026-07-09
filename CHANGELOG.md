@@ -5,6 +5,31 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.7.0] - 2026-07-08
+
+### Added
+- Project landing page at `docs/index.html`, served via GitHub Pages at
+  https://yousafkhamza.github.io/aws-patch/ once enabled (Settings →
+  Pages → Deploy from a branch → `main` / `/docs` — see README for full
+  steps). Fetches the latest release directly from the GitHub API
+  (`GET /repos/yousafkhamza/aws-patch/releases/latest`) client-side on
+  load, so the version number, publish date, and download links for
+  every release asset (`.deb`, `.rpm`, tarball, `SHA256SUMS`) always
+  reflect whatever was most recently published -- nothing to update by
+  hand when a new version ships. Also renders exact `dpkg`/`rpm` install
+  commands with the real asset filenames filled in once the API response
+  arrives. Falls back to a direct link to the Releases page if the API
+  call fails (e.g. hourly rate limit from an unauthenticated client)
+  rather than showing a broken UI. Dark terminal-styled design (amber/
+  green accents on near-black) matching the project's own console
+  output aesthetic; includes an "Open Source" / "MIT License" badge
+  pair and an author credit.
+- `docs/.nojekyll` so GitHub Pages serves `docs/` as-is (needed since
+  the directory also holds plain Markdown troubleshooting/recovery docs
+  and the man page source, none of which are meant to be Jekyll-built).
+- README: "Project site (GitHub Pages)" section with one-time setup
+  steps, and a site badge/link at the top of the README.
+
 ## [1.6.1] - 2026-07-08
 
 ### Fixed
@@ -344,6 +369,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Never reboots unless `--reboot` is explicitly passed or the administrator
   interactively confirms.
 
+[1.7.0]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.7.0
 [1.6.1]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.6.1
 [1.6.0]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.6.0
 [1.5.0]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.5.0
