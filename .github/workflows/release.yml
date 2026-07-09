@@ -199,6 +199,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="${{ inputs.tag || github.ref_name }}"
+
+          # Idempotent: a prior run of this workflow (e.g. one where an
+          # earlier job failed after this step already succeeded, such
+          # as an environment-protection rejection on the `pages` job)
+          # may have already created this release. `gh release create`
+          # refuses if the tag already exists, which would otherwise
+          # permanently block every re-run. Delete any existing release
+          # for this tag first so re-runs always produce a clean,
+          # up-to-date release rather than failing.
+          if gh release view "$tag" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "Release ${tag} already exists; deleting before recreating it."
+            gh release delete "$tag" --repo "${{ github.repository }}" --yes
+          fi
+
           gh release create "$tag" \
             --repo "${{ github.repository }}" \
             --title "aws-patch ${tag}" \

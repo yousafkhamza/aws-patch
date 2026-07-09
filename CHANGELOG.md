@@ -5,6 +5,22 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.8.1] - 2026-07-09
+
+### Fixed
+- `release.yml`'s "Create GitHub Release" step failed with `a release
+  with the same tag name already exists` on any re-run where the
+  release had already been created in a prior attempt (e.g. the `pages`
+  job failing on GitHub's auto-created `github-pages` environment
+  protection rules, which rejects tag refs by default -- a separate,
+  one-time Settings fix -- while the independent `release` job, which
+  only depends on `build`, had already succeeded and created the
+  release). Made the step idempotent: it now checks whether a release
+  for the tag already exists via `gh release view` and deletes it
+  first (keeping the underlying git tag intact) before recreating it,
+  so re-running the workflow always produces a clean, current release
+  instead of failing on a duplicate.
+
 ## [1.8.0] - 2026-07-09
 
 ### Added
@@ -400,6 +416,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Never reboots unless `--reboot` is explicitly passed or the administrator
   interactively confirms.
 
+[1.8.1]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.8.1
 [1.8.0]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.8.0
 [1.7.1]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.7.1
 [1.7.0]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.7.0
