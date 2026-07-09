@@ -586,6 +586,8 @@ See [CHANGELOG.md](CHANGELOG.md) for release history.
    - Builds a source tarball and `SHA256SUMS`
    - Publishes a GitHub Release with all of the above attached and
      release notes pulled from `CHANGELOG.md`
+   - Deploys `docs/` to GitHub Pages (via `.github/workflows/pages.yml`,
+     called as a job) in parallel with the package build
 
 To build packages locally without pushing a tag (e.g. to sanity-check
 before a release):
@@ -606,23 +608,35 @@ release directly from the GitHub API at load time (`GET
 whatever was most recently published — nothing to update by hand when a
 new version ships.
 
-**One-time setup** (repository owner, via the GitHub web UI):
+Deployment is fully automated via GitHub Actions
+(`.github/workflows/pages.yml`, using the official
+`actions/configure-pages` → `upload-pages-artifact` →
+`deploy-pages` flow) and runs two ways:
 
-1. Go to **Settings → Pages**.
-2. Under **Build and deployment → Source**, choose **Deploy from a
-   branch**.
-3. Set **Branch** to `main` and the folder to **`/docs`**, then **Save**.
-4. GitHub publishes the site within a minute or two at
-   `https://yousafkhamza.github.io/aws-patch/`.
+- **On every push to `main` that touches `docs/**`** — so the site
+  stays current the moment you tweak `index.html`, styling, or copy,
+  independent of cutting a release.
+- **As part of the release pipeline** — `.github/workflows/release.yml`
+  calls `pages.yml` as a job (running in parallel with the package
+  build, both gated behind the lint/test suite passing first), so a
+  single `git push origin vX.Y.Z` handles tests, `.deb`/`.rpm`
+  packages, the GitHub Release, *and* the Pages deploy together.
 
-`docs/.nojekyll` is already present, which tells GitHub Pages to serve
-files as-is rather than running them through Jekyll — needed since
-`docs/` also holds the plain Markdown troubleshooting/recovery guides
-and the man page source, which aren't meant to be built as a Jekyll
-site.
+**One-time setup** (repository owner, via the GitHub web UI): go to
+**Settings → Pages** and set **Source** to **GitHub Actions** (not
+"Deploy from a branch"). If this repo previously had "Deploy from a
+branch" selected, switch it — the two mechanisms don't share state, and
+only one can be active. GitHub also switches this automatically to
+"GitHub Actions" the first time `pages.yml` deploys successfully, so
+this step is a safety net more than a hard requirement.
 
-If the API call fails (e.g. hourly rate limit from an unauthenticated
-client), the page falls back to a direct link to the
+After that, pushing to `main` (with a `docs/` change) or pushing a
+release tag is all it takes — check the **Actions** tab for the "Deploy
+Pages" run, and the **Environments** tab (or the Actions run summary)
+for the live URL once it completes.
+
+If the page's client-side API call fails (e.g. hourly rate limit from
+an unauthenticated client), it falls back to a direct link to the
 [Releases page](https://github.com/yousafkhamza/aws-patch/releases)
 rather than showing a broken UI.
 

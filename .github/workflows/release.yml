@@ -117,6 +117,22 @@ jobs:
           if-no-files-found: error
 
   # ---------------------------------------------------------------------
+  # Deploy the GitHub Pages site (docs/) via the reusable pages.yml
+  # workflow. Independent of package building -- the site fetches
+  # release data from the GitHub API client-side, so it doesn't need
+  # the build job's artifacts -- runs in parallel with `build` once
+  # `test` passes.
+  # ---------------------------------------------------------------------
+  pages:
+    name: Deploy GitHub Pages
+    needs: test
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/pages.yml
+
+  # ---------------------------------------------------------------------
   # Create the GitHub Release itself, attaching every built artifact and
   # the matching section of CHANGELOG.md as release notes.
   # ---------------------------------------------------------------------

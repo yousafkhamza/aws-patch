@@ -1,0 +1,59 @@
+name: Deploy Pages
+
+# Deploys docs/ to GitHub Pages using the official Actions-based flow
+# (actions/configure-pages + upload-pages-artifact + deploy-pages) --
+# no Jekyll build step, no manual "Deploy from a branch" setting to
+# babysit. On the repo's first successful run of this workflow, GitHub
+# automatically switches Settings -> Pages -> Source to "GitHub Actions"
+# for you.
+#
+# Runs two ways:
+#   1. Standalone: any push to main that touches docs/**, so the site
+#      stays current even without cutting a release (e.g. tweaking
+#      index.html's copy or styling).
+#   2. As a reusable workflow (`workflow_call`), invoked as a job from
+#      release.yml -- so a single tag push handles tests, package
+#      builds, the GitHub Release, AND the Pages deploy in one pipeline.
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "docs/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch: {}
+  workflow_call: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one Pages deployment at a time; queue rather than cancel an
+# in-flight deployment (GitHub's recommended setting for this action).
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build & deploy docs/ to GitHub Pages
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload docs/ as the Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

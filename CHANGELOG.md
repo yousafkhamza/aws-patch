@@ -5,6 +5,29 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.8.0] - 2026-07-09
+
+### Added
+- Automated GitHub Pages deployment via a new reusable workflow,
+  `.github/workflows/pages.yml`, using the official Actions-based flow
+  (`actions/configure-pages` → `actions/upload-pages-artifact` →
+  `actions/deploy-pages`) instead of the manual "Deploy from a branch"
+  setting. Runs two ways:
+  - Standalone, on every push to `main` that touches `docs/**` — the
+    site updates the moment `index.html`/styling/copy changes, with no
+    need to cut a release.
+  - As a job inside `.github/workflows/release.yml` (invoked via
+    `uses: ./.github/workflows/pages.yml`), running in parallel with
+    the package build once the lint/test gate passes -- so a single
+    `git push origin vX.Y.Z` now handles tests, `.deb`/`.rpm` packages,
+    the GitHub Release, *and* the Pages deploy together, as one
+    pipeline.
+- README: rewrote the "Project site (GitHub Pages)" section to describe
+  the automated flow (including the one-time "Settings → Pages → Source:
+  GitHub Actions" switch, since the branch-based and Actions-based
+  deployment mechanisms don't share state) in place of the old manual
+  branch/folder setup steps.
+
 ## [1.7.1] - 2026-07-09
 
 ### Changed
@@ -377,6 +400,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Never reboots unless `--reboot` is explicitly passed or the administrator
   interactively confirms.
 
+[1.8.0]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.8.0
 [1.7.1]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.7.1
 [1.7.0]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.7.0
 [1.6.1]: https://github.com/yousafkhamza/aws-patch/releases/tag/v1.6.1
