@@ -93,6 +93,35 @@ The installer:
 - Executes `aws-patch.sh` immediately after install, forwarding your
   arguments
 
+#### Pinning to a specific version
+
+By default (`AWS_PATCH_REF=main`), the one-liner always installs whatever
+is currently on `main` — so an existing command you already have saved,
+e.g.:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yousafkhamza/aws-patch/main/install.sh | sudo bash -s -- --yes --reboot
+```
+
+automatically picks up every new release (like the kernel-filtering fix
+in `1.9.0` below) the next time it runs — there's nothing to change on
+your end for that command specifically.
+
+If you'd rather pin to a known-good, reproducible version instead of
+always tracking `main` (recommended for production/fleet automation),
+set `AWS_PATCH_REF` to a release tag:
+
+```bash
+curl -fsSL "https://raw.githubusercontent.com/yousafkhamza/aws-patch/v1.9.0/install.sh" \
+  | sudo AWS_PATCH_REF=v1.9.0 bash -s -- --yes --reboot
+```
+
+Both the URL *and* the `AWS_PATCH_REF` env var need to reference the tag:
+the URL controls which copy of `install.sh` you fetch first, and
+`AWS_PATCH_REF` controls which ref *that copy* then downloads
+`aws-patch.sh`/`lib/*` from. Check `aws-patch --version` after install to
+confirm which one landed.
+
 ### Package install (.deb / .rpm)
 
 Every [GitHub Release](https://github.com/yousafkhamza/aws-patch/releases)
@@ -465,6 +494,24 @@ distro-native reboot indicator where available (`needs-restarting -r` on
 RHEL-family systems, `/var/run/reboot-required` on Debian-family systems).
 If they differ, a reboot is recommended in the summary. Nothing more
 happens unless you asked for `--reboot`.
+
+**Valid candidates only (since 1.9.0):** before picking a "latest"
+kernel version, `aws-patch` filters out anything that merely *looks* like
+a kernel version string but isn't a real, bootable, current-architecture
+build:
+
+- Debian/Ubuntu: `-dbgsym`, `-dbg`, and `-unsigned` packages (e.g.
+  `linux-image-6.8.0-31-generic-dbgsym` ships no bootable kernel, but its
+  name would otherwise sort as a valid — sometimes higher — version).
+- RHEL-family (yum/dnf): candidates are anchored to the host's detected
+  architecture, excluding `kernel.src` (a source RPM, not installable)
+  and any other architecture's build that a multilib-capable
+  configuration might otherwise surface.
+
+This is automatic and requires no flag; it just means the
+`Installed Kernel` / `Available Kernel` fields in `--check`/`--dry-run`
+output and the final summary can no longer be thrown off by a
+non-bootable package that happened to sort highest.
 
 ## AWS recovery guidance
 
