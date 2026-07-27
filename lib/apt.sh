@@ -156,10 +156,21 @@ pm_fix_broken() {
 # pm_get_installed_kernels
 #   Lists installed kernel image versions (one per line), consumed by
 #   lib/kernel.sh. Never removes anything; read-only query.
+#
+#   Filters out packages that match the "linux-image-<number>..." naming
+#   pattern but are NOT a real, bootable kernel build -- these are invalid
+#   candidates that would otherwise pollute the `sort -V | tail -n1` pick:
+#     - "-dbgsym" packages (debug symbols, e.g. linux-image-5.15.0-25-
+#       generic-dbgsym) -- these carry a real-looking version string but
+#       ship no bootable kernel at all.
+#     - "-dbg" packages (older-style debug image naming).
+#   See utils_filter_valid_kernel_lines in lib/utils.sh for the shared
+#   exclusion pattern used by every pm module.
 # ---------------------------------------------------------------------------
 pm_get_installed_kernels() {
     dpkg-query -W -f='${Package} ${Version}\n' 'linux-image-*' 2>/dev/null \
         | awk '$1 ~ /^linux-image-[0-9]/ {print $1}' \
+        | utils_filter_valid_kernel_lines \
         | sed -E 's/^linux-image-//' \
         | sort -V
 }
@@ -175,10 +186,15 @@ pm_get_installed_kernels() {
 #   package apt currently knows about (from repo metadata, refreshed by
 #   pm_update_repos), then takes the highest version -- this reflects
 #   what's available even if apt hasn't been asked to upgrade yet.
+#
+#   Invalid candidates (dbgsym/dbg packages -- see pm_get_installed_kernels
+#   above) are filtered out first, so a debug-symbols package can never be
+#   mistaken for "the latest available kernel".
 # ---------------------------------------------------------------------------
 pm_get_latest_available_kernel() {
     apt-cache search --names-only '^linux-image-[0-9]' 2>/dev/null \
         | awk '{print $1}' \
+        | utils_filter_valid_kernel_lines \
         | sed -E 's/^linux-image-//' \
         | sort -V | tail -n1
 }

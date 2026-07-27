@@ -5,6 +5,28 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.9.0] - 2026-07-28
+
+### Added
+- `utils_filter_valid_kernel_lines` in `lib/utils.sh`: a shared filter
+  that every pm module now runs candidate kernel package lines through
+  before picking a "latest" version with `sort -V`. This closes a gap
+  where a package that merely *looks* like a kernel version string could
+  win that comparison and be misreported as an installed or available
+  kernel:
+  - `lib/apt.sh` (`pm_get_installed_kernels`,
+    `pm_get_latest_available_kernel`): now excludes `-dbgsym`, `-dbg`,
+    and `-unsigned` packages (e.g. `linux-image-6.8.0-31-generic-dbgsym`
+    ships no bootable kernel at all, but its name sorts as a valid, and
+    sometimes higher, version).
+  - `lib/yum.sh` and `lib/dnf.sh` (`pm_get_latest_available_kernel`):
+    candidates are now anchored to the detected `$ARCH`, excluding
+    `kernel.src` (source RPM, not installable) and any other
+    architecture's build that a multilib-capable `yum`/`dnf`
+    configuration might otherwise surface.
+- New test coverage in `tests/run_tests.sh` for all of the above
+  (`== invalid kernel candidate filtering ==`).
+
 ## [1.8.1] - 2026-07-09
 
 ### Fixed

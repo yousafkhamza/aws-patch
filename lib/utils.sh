@@ -12,6 +12,8 @@
 #   utils_human_duration <secs>  -> echoes "Xm Ys" style duration
 #   utils_command_exists <name>  -> returns 0 if command is on PATH
 #   utils_die <exit_code> <msg>  -> logs error and exits
+#   utils_filter_valid_kernel_lines -> stdin|stdout filter dropping
+#                                       non-bootable kernel package lines
 
 set -Eeuo pipefail
 
@@ -109,6 +111,29 @@ utils_human_duration() {
 # ---------------------------------------------------------------------------
 utils_command_exists() {
     command -v "$1" >/dev/null 2>&1
+}
+
+# ---------------------------------------------------------------------------
+# utils_filter_valid_kernel_lines
+#   Reads package-name-like lines from stdin and drops ones that are not
+#   a real, bootable kernel build even though they match a kernel package
+#   naming pattern. Used by every pm module before picking a "latest"
+#   version with `sort -V`, so a non-kernel package can never win that
+#   comparison and be reported as an installed/available kernel:
+#
+#     - "-dbgsym" / "-dbg" packages (Debian/Ubuntu debug-symbol builds,
+#       e.g. linux-image-5.15.0-25-generic-dbgsym) -- carry a real-looking
+#       version string but ship no bootable kernel.
+#     - "-unsigned" packages -- pending-signature builds that are not
+#       what actually boots on Secure Boot systems.
+#
+#   pm modules that enumerate RPM "kernel.<arch>" style output handle
+#   architecture filtering themselves (see lib/yum.sh / lib/dnf.sh),
+#   since that requires comparing against $ARCH rather than a static
+#   name pattern.
+# ---------------------------------------------------------------------------
+utils_filter_valid_kernel_lines() {
+    grep -Ev -- '-dbgsym([-.]|$)|-dbg([-.]|$)|-unsigned([-.]|$)' || true
 }
 
 # ---------------------------------------------------------------------------

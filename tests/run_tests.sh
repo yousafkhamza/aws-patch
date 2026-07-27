@@ -800,6 +800,149 @@ done < "/tmp/aws-patch-broken-fix-test-$$.txt"
 rm -f "/tmp/aws-patch-broken-fix-test-$$.txt"
 
 # ---------------------------------------------------------------------------
+# Section: invalid kernel candidate filtering
+#   A "valid" kernel candidate is a real, bootable, current-architecture
+#   kernel build. Every pm module must exclude anything that merely LOOKS
+#   like a kernel version string (debug-symbol packages, source RPMs,
+#   wrong-architecture builds) before picking a "highest version" with
+#   `sort -V`, or a non-kernel package could win that comparison and be
+#   reported as an installed/available kernel.
+# ---------------------------------------------------------------------------
+echo "== invalid kernel candidate filtering =="
+
+(
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/lib/logger.sh"
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/lib/utils.sh"
+
+    # utils_filter_valid_kernel_lines: drops dbgsym/dbg/unsigned lines,
+    # keeps everything else untouched and in order.
+    input=$'linux-image-6.8.0-31-generic\nlinux-image-6.8.0-31-generic-dbgsym\nlinux-image-6.9.0-1-generic\nlinux-image-6.9.0-1-generic-dbg\nlinux-image-unsigned-6.9.0-1-generic'
+    result="$(printf '%s\n' "$input" | utils_filter_valid_kernel_lines)"
+    expected=$'linux-image-6.8.0-31-generic\nlinux-image-6.9.0-1-generic'
+    if [[ "$result" == "$expected" ]]; then
+        echo "PASS: utils_filter_valid_kernel_lines drops dbgsym/dbg/unsigned packages only"
+    else
+        echo "FAIL: utils_filter_valid_kernel_lines expected '${expected}', got '${result}'"
+    fi
+) > /tmp/aws-patch-kernel-filter-test-$$.txt 2>&1
+
+while IFS= read -r line; do
+    case "$line" in
+        PASS:*) pass "${line#PASS: }" ;;
+        FAIL:*) fail "${line#FAIL: }" ;;
+    esac
+done < "/tmp/aws-patch-kernel-filter-test-$$.txt"
+rm -f "/tmp/aws-patch-kernel-filter-test-$$.txt"
+
+(
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/lib/logger.sh"
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/lib/utils.sh"
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/lib/common.sh"
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/lib/apt.sh"
+
+    # A -dbgsym package sorts higher than the real newest kernel here
+    # ("generic-dbgsym" > "generic" under `sort -V`). Without filtering,
+    # this would be misreported as the latest available kernel.
+    # shellcheck disable=SC2317 # invoked indirectly via pm_get_latest_available_kernel
+    apt-cache() {
+        cat <<'EOF'
+linux-image-6.8.0-31-generic - Linux kernel image
+linux-image-6.8.0-31-generic-dbgsym - Debug symbols
+linux-image-unsigned-6.9.0-1-generic - Signed kernel image
+EOF
+    }
+    export -f apt-cache
+
+    result="$(pm_get_latest_available_kernel)"
+    if [[ "$result" == "6.8.0-31-generic" ]]; then
+        echo "PASS: pm_get_latest_available_kernel (apt) ignores dbgsym/unsigned packages"
+    else
+        echo "FAIL: expected 6.8.0-31-generic, got '${result}'"
+    fi
+
+    # shellcheck disable=SC2317 # invoked indirectly via pm_get_installed_kernels
+    dpkg-query() {
+        cat <<'EOF'
+linux-image-6.8.0-31-generic 6.8.0-31.31
+linux-image-6.8.0-31-generic-dbgsym 6.8.0-31.31
+EOF
+    }
+    export -f dpkg-query
+
+    result="$(pm_get_installed_kernels)"
+    if [[ "$result" == "6.8.0-31-generic" ]]; then
+        echo "PASS: pm_get_installed_kernels (apt) ignores dbgsym packages"
+    else
+        echo "FAIL: expected only '6.8.0-31-generic', got '${result}'"
+    fi
+) > /tmp/aws-patch-apt-kernel-filter-test-$$.txt 2>&1
+
+while IFS= read -r line; do
+    case "$line" in
+        PASS:*) pass "${line#PASS: }" ;;
+        FAIL:*) fail "${line#FAIL: }" ;;
+    esac
+done < "/tmp/aws-patch-apt-kernel-filter-test-$$.txt"
+rm -f "/tmp/aws-patch-apt-kernel-filter-test-$$.txt"
+
+for pm_file in yum.sh dnf.sh; do
+    (
+        # shellcheck disable=SC1091
+        source "${REPO_ROOT}/lib/logger.sh"
+        # shellcheck disable=SC1091
+        source "${REPO_ROOT}/lib/utils.sh"
+        # shellcheck disable=SC1091
+        source "${REPO_ROOT}/lib/common.sh"
+        # shellcheck disable=SC1090,SC1091
+        source "${REPO_ROOT}/lib/${pm_file}"
+
+        ARCH="x86_64"
+
+        # `kernel.src` (source RPM) and `kernel.i686` (wrong arch) both
+        # sort higher than the real newest x86_64 build here. Without
+        # arch-anchored filtering, one of these invalid entries would be
+        # misreported as the latest available kernel.
+        pm_cmd="${pm_file%.sh}"
+        eval "
+        # shellcheck disable=SC2317 # invoked indirectly via pm_get_latest_available_kernel
+        ${pm_cmd}() {
+            case \"\$*\" in
+                *'list available kernel'*|*'list kernel --showduplicates'*|*'list kernel'*)
+                    cat <<'EOF'
+kernel.x86_64    4.14.355-282.729.amzn2   amzn2-core
+kernel.i686      4.14.355-999.999.amzn2   amzn2-core
+kernel.src       4.14.355-999.999.amzn2   amzn2-core
+EOF
+                    ;;
+            esac
+        }
+        export -f ${pm_cmd}
+        "
+
+        result="$(pm_get_latest_available_kernel)"
+        if [[ "$result" == "4.14.355-282.729.amzn2.x86_64" ]]; then
+            echo "PASS: pm_get_latest_available_kernel (${pm_cmd}) ignores kernel.src/wrong-arch entries"
+        else
+            echo "FAIL: (${pm_cmd}) expected 4.14.355-282.729.amzn2.x86_64, got '${result}'"
+        fi
+    ) > "/tmp/aws-patch-${pm_file}-arch-filter-test-$$.txt" 2>&1
+
+    while IFS= read -r line; do
+        case "$line" in
+            PASS:*) pass "${line#PASS: }" ;;
+            FAIL:*) fail "${line#FAIL: }" ;;
+        esac
+    done < "/tmp/aws-patch-${pm_file}-arch-filter-test-$$.txt"
+    rm -f "/tmp/aws-patch-${pm_file}-arch-filter-test-$$.txt"
+done
+
+# ---------------------------------------------------------------------------
 # Results
 # ---------------------------------------------------------------------------
 echo ""

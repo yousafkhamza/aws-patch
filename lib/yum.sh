@@ -169,13 +169,23 @@ pm_get_installed_kernels() {
 #   ("<version>-<release>.<arch>") so the two are directly comparable.
 # ---------------------------------------------------------------------------
 pm_get_latest_available_kernel() {
-    local candidates ver
+    local candidates ver kernel_arch
+
+    # Only accept lines whose package field is exactly "kernel.<ARCH>".
+    # `yum list --showduplicates` on multilib-capable systems can also
+    # surface "kernel.src" (source RPM, not installable) and, less
+    # commonly, other architectures' builds -- either of which would be
+    # an invalid candidate that could win the `sort -V | tail -n1` pick
+    # and never actually match the running kernel. Anchoring to the
+    # detected $ARCH keeps only real, installable candidates for this
+    # host.
+    kernel_arch="${ARCH:-$(uname -m)}"
 
     candidates="$(yum list kernel --showduplicates -q 2>/dev/null \
-        | awk '/^kernel\.[a-zA-Z0-9_]+/ {print $2}' || true)"
+        | awk -v arch="$kernel_arch" '$0 ~ "^kernel\\." arch "([[:space:]]|$)" {print $2}' || true)"
     candidates+=$'\n'
     candidates+="$(yum check-update kernel -q 2>&1 \
-        | awk '/^kernel\.[a-zA-Z0-9_]+/ {print $2}' || true)"
+        | awk -v arch="$kernel_arch" '$0 ~ "^kernel\\." arch "([[:space:]]|$)" {print $2}' || true)"
 
     ver="$(printf '%s\n' "$candidates" | grep -E '.' | sort -V | tail -n1 || true)"
 
