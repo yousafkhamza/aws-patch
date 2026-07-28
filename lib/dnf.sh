@@ -180,32 +180,75 @@ _dnf_collect_releasever_candidates() {
 }
 
 # ---------------------------------------------------------------------------
+# _dnf_current_releasever_snapshot
+#   Private helper. AL2023-specific. OS_VERSION_ID (from common_detect_os)
+#   is only ever the generic major version ("2023") -- it never contains
+#   the dated point-release snapshot (e.g. "2023.12.20260727"), so it
+#   cannot be used on its own to tell whether a scraped candidate is
+#   actually newer than what's currently running. The dated snapshot
+#   only appears in PRETTY_NAME (captured as OS_NAME by common_detect_os,
+#   e.g. "Amazon Linux 2023.12.20260727"), so extract it from there.
+#   Echoes the dated snapshot if found, or the generic OS_VERSION_ID
+#   otherwise (e.g. a freshly-launched AMI that hasn't crossed a point
+#   release yet) -- either way, always something safe to compare against.
+# ---------------------------------------------------------------------------
+_dnf_current_releasever_snapshot() {
+    local dated
+    dated="$(printf '%s' "${OS_NAME:-}" | grep -Eo '2023\.[0-9]+\.[0-9]{8}' | head -n1 || true)"
+    if [[ -n "$dated" ]]; then
+        printf '%s' "$dated"
+    else
+        printf '%s' "${OS_VERSION_ID:-0}"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # pm_check_releasever_update
 #   This function is read-only: it only detects whether a newer release
 #   is available and echoes its version string (e.g. "2023.12.20260629"),
 #   or prints nothing if already on the latest release. No-op (prints
-#   nothing) on every other OS. Echoes the highest version found by
-#   _dnf_collect_releasever_candidates.
+#   nothing) on every other OS.
+#
+#   IMPORTANT: the release-notification banner scraped by
+#   _dnf_collect_releasever_candidates lists the latest known AL2023
+#   release unconditionally -- including when it's the exact release
+#   you're already running. Without comparing against the currently
+#   running dated snapshot, this function would report "newer release
+#   available" forever, even immediately after successfully upgrading to
+#   that exact release -- re-triggering the expensive
+#   pm_upgrade_releasever step on every single run for no reason. Only a
+#   candidate that is genuinely version-greater than
+#   _dnf_current_releasever_snapshot is ever reported.
 # ---------------------------------------------------------------------------
 pm_check_releasever_update() {
-    local latest
+    local latest current
     latest="$(_dnf_collect_releasever_candidates | sort -V | tail -n1 || true)"
+    current="$(_dnf_current_releasever_snapshot)"
 
-    if [[ -n "$latest" ]]; then
+    if [[ -n "$latest" ]] && utils_version_gt "$latest" "$current"; then
         printf '%s' "$latest"
     fi
 }
 
 # ---------------------------------------------------------------------------
 # pm_list_releasever_updates
-#   Read-only: echoes every distinct release-version candidate found,
-#   one per line, sorted ascending (lowest to highest). Empty output if
-#   none found / not on AL2023. Used to present a full list of available
-#   point releases (e.g. for interactive selection) rather than just the
-#   single highest version pm_check_releasever_update reports.
+#   Read-only: echoes every distinct release-version candidate found that
+#   is genuinely newer than the currently running release, one per line,
+#   sorted ascending (lowest to highest). Empty output if none found /
+#   not on AL2023 / already on the latest release. Used to present a
+#   full list of available point releases (e.g. for interactive
+#   selection) rather than just the single highest version
+#   pm_check_releasever_update reports.
 # ---------------------------------------------------------------------------
 pm_list_releasever_updates() {
-    _dnf_collect_releasever_candidates | sort -Vu
+    local current candidate
+    current="$(_dnf_current_releasever_snapshot)"
+    while IFS= read -r candidate; do
+        [[ -z "$candidate" ]] && continue
+        if utils_version_gt "$candidate" "$current"; then
+            printf '%s\n' "$candidate"
+        fi
+    done < <(_dnf_collect_releasever_candidates | sort -Vu)
 }
 
 # ---------------------------------------------------------------------------

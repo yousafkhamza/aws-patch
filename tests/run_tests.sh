@@ -469,6 +469,70 @@ BANNER
         echo "FAIL: expected 2023.12.20260629, got '${result}'"
     fi
 
+    # Case 2b (real-world regression): this is the exact scenario
+    # observed on a live AL2023 host. The release-notification banner
+    # lists the latest known release UNCONDITIONALLY, even when it's the
+    # exact dated snapshot the host is already running -- if
+    # pm_check_releasever_update doesn't compare against the currently
+    # running release, it reports "newer release available" forever,
+    # re-triggering the expensive pm_upgrade_releasever step on every
+    # single run even immediately after a successful upgrade to that
+    # exact release.
+    OS_ID="amzn"
+    OS_VERSION_ID="2023"
+    OS_NAME="Amazon Linux 2023.12.20260727"
+    # shellcheck disable=SC2317 # invoked indirectly via pm_check_releasever_update
+    dnf() {
+        case "$*" in
+            *"check-update"*)
+                {
+                    cat <<'BANNER'
+WARNING:
+  A newer release of "Amazon Linux" is available.
+
+  Available Versions:
+
+  Version 2023.12.20260720:
+    Run the following command to upgrade to 2023.12.20260720:
+
+  Version 2023.12.20260724:
+    Run the following command to upgrade to 2023.12.20260724:
+
+  Version 2023.12.20260727:
+    Run the following command to upgrade to 2023.12.20260727:
+BANNER
+                } >&2
+                return 100
+                ;;
+            *"check-release-update --help"*) return 1 ;;
+            *) return 0 ;;
+        esac
+    }
+    export -f dnf
+    result="$(pm_check_releasever_update)"
+    if [[ -z "$result" ]]; then
+        echo "PASS: already on the latest dated snapshot (2023.12.20260727) -> no update reported, even though the banner lists it"
+    else
+        echo "FAIL: expected empty result (already current), got '${result}' -- would re-trigger pm_upgrade_releasever needlessly"
+    fi
+
+    list_result="$(pm_list_releasever_updates)"
+    if [[ -z "$list_result" ]]; then
+        echo "PASS: pm_list_releasever_updates also correctly reports nothing when already on the latest dated snapshot"
+    else
+        echo "FAIL: pm_list_releasever_updates expected empty, got: ${list_result}"
+    fi
+
+    # Case 2c: genuinely behind -- banner lists a snapshot newer than the
+    # one currently running; must still be detected correctly.
+    OS_NAME="Amazon Linux 2023.12.20260720"
+    result="$(pm_check_releasever_update)"
+    if [[ "$result" == "2023.12.20260727" ]]; then
+        echo "PASS: genuinely behind (running 2023.12.20260720) -> correctly reports 2023.12.20260727 as newer"
+    else
+        echo "FAIL: expected 2023.12.20260727, got '${result}'"
+    fi
+
     # Case 3: not Amazon Linux at all -> must be a true no-op regardless
     # of what dnf would print (function should return before calling it).
     OS_ID="rhel"

@@ -5,6 +5,28 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.10.1] - 2026-07-28
+
+### Fixed
+- **Amazon Linux 2023 "newer release available" reported forever, even
+  immediately after successfully upgrading to that exact release.**
+  `dnf`'s release-notification banner lists the latest known AL2023
+  point-release snapshot unconditionally -- including when it's the
+  exact one the host is already running. `pm_check_releasever_update`
+  (`lib/dnf.sh`) was reporting that scraped value as "available" with no
+  comparison against the currently running release, so every run
+  re-triggered the expensive `pm_upgrade_releasever` step
+  (`dnf upgrade --releasever=...`, often 30s-plus, sometimes much longer
+  under load) for a release the host was already on -- with nothing to
+  actually upgrade. Fixed by extracting the currently-running dated
+  snapshot from `OS_NAME`/`PRETTY_NAME` (the generic `OS_VERSION_ID` is
+  only ever `"2023"` and can't be used for this comparison) and only
+  reporting a candidate that is genuinely newer. `pm_list_releasever_updates`
+  received the same fix. New regression tests reproduce the exact
+  scenario from a live host (banner lists `2023.12.20260727`while
+  already running `2023.12.20260727`) alongside a "genuinely behind"
+  case to confirm real updates are still detected correctly.
+
 ## [1.10.0] - 2026-07-28
 
 ### Added
