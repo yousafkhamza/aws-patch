@@ -184,6 +184,7 @@ sudo aws-patch [OPTIONS]
 |--------------|--------------------------------------------------------------------|
 | `--check`    | Report system/kernel/patch status only; installs nothing            |
 | `--dry-run`  | Show what would be done without making any changes                  |
+| `--kernel`   | Also install a newer kernel package if one's available (default: kernel is excluded from the run) |
 | `--reboot`   | Automatically reboot if a reboot is required after patching         |
 | `--yes`      | Assume "yes" for prompts (non-interactive / automation-friendly)    |
 | `--broken-fix` | Automatically repair broken/unmet-dependency package state and retry once on failure |
@@ -233,8 +234,9 @@ or as a pre-maintenance-window sanity check.
 
 Runs the same detection and pre-flight checks as a live run, then prints
 **exactly which package operations would execute** (`pm_update_repos`,
-`pm_full_upgrade`, `pm_install_kernel_meta`) and lists currently-upgradable
-packages — again, without changing anything.
+`pm_full_upgrade_no_kernel` by default, or `pm_full_upgrade` +
+`pm_install_kernel_meta` if `--kernel` is also passed) and lists
+currently-upgradable packages — again, without changing anything.
 
 ```bash
 sudo aws-patch --dry-run
@@ -243,8 +245,7 @@ sudo aws-patch --dry-run
 ```
 == Applying patches (pm=apt) ==
 ℹ [dry-run] Would run: pm_update_repos
-ℹ [dry-run] Would run: pm_full_upgrade
-ℹ [dry-run] Would run: pm_install_kernel_meta
+ℹ [dry-run] Would run: pm_full_upgrade_no_kernel (kernel excluded; pass --kernel to include)
 ℹ [dry-run] Would list upgradable packages:
 libssl3/jammy-updates 3.0.2-0ubuntu1.15 amd64 [upgradable from: 3.0.2-0ubuntu1.14]
 ...
@@ -256,6 +257,42 @@ restrict to root). Combine with `--verbose` to see full command-level
 detail. Ideal for change-management review before a scheduled maintenance
 window — see
 [examples/README.md](examples/README.md#dry-run-before-a-maintenance-window).
+
+---
+
+#### `--kernel`
+
+By default, `aws-patch` excludes the kernel package from a run's upgrade
+entirely — every other package patches normally, but the kernel is left
+exactly as it was, so routine patching never forces a reboot decision on
+you. Pass `--kernel` to also install a newer kernel if one's available:
+
+```bash
+sudo aws-patch --yes --kernel --reboot
+```
+
+This is the split most teams actually want day-to-day: patch everything
+on a regular cadence without `--kernel` (no reboot risk, ever), then run
+periodically with `--yes --kernel --reboot` on its own schedule — or
+during an actual maintenance window — for the kernel/reboot piece.
+
+Under the hood: on Debian/Ubuntu, the currently-installed kernel/headers/
+modules packages are `apt-mark hold`-ed for the duration of the upgrade
+and unheld immediately after (success or failure); on RHEL-family systems
+(yum/dnf), the transaction is run with `--exclude='kernel*'` natively.
+Either way, nothing is ever removed and GRUB is never touched — same
+guarantees as always.
+
+If a newer kernel is available and `--kernel` wasn't passed, the summary
+says so explicitly:
+
+```
+Kernel Update:         excluded this run (pass --kernel to include)
+```
+
+`--kernel` has no effect on its own if no newer kernel is available, and
+under `--check`/`--dry-run` it only affects what's reported, not what's
+installed.
 
 ---
 
@@ -427,6 +464,7 @@ Flags compose freely. A few common combinations:
 | Preview changes before a maintenance window                   | `sudo aws-patch --dry-run --verbose`      |
 | Unattended patch, leave reboot decision to a human             | `sudo aws-patch --yes`                    |
 | Fully unattended patch, including reboot if needed              | `sudo aws-patch --yes --reboot`           |
+| Also install a newer kernel and reboot into it                 | `sudo aws-patch --yes --kernel --reboot`  |
 | Unattended patch that auto-repairs broken dependency state       | `sudo aws-patch --yes --broken-fix`       |
 | Debug a failing patch run                                      | `sudo aws-patch --yes --verbose`          |
 
@@ -434,7 +472,7 @@ An unrecognized flag (e.g. a typo) causes `aws-patch` to print an error
 and exit with code `2` rather than silently ignoring it or guessing your
 intent.
 
-### Example output (full live run)
+### Example output (full live run, with `--kernel`)
 
 ```
 == aws-patch v1.0.0 ==
@@ -455,7 +493,7 @@ intent.
 
 == Applying patches (pm=apt) ==
 ✔ Refreshing package repositories (2s)
-✔ Applying package upgrades (48s)
+✔ Applying package upgrades (kernel included) (48s)
 ✔ Ensuring latest kernel package is installed (3s)
 
 == aws-patch Summary ==
@@ -471,6 +509,29 @@ intent.
   Log File:              /var/log/aws-patch.log
 ```
 
+### Example output (default run, no `--kernel`)
+
+Same host, same available kernel update, but `--kernel` wasn't passed:
+everything else patches normally, the kernel is left alone, and the
+summary says so explicitly instead of silently doing nothing about it.
+
+```
+== Applying patches (pm=apt) ==
+✔ Refreshing package repositories (2s)
+✔ Applying package upgrades (kernel excluded) (46s)
+⚠ Skipped installing kernel 5.15.0-105-generic (--kernel not passed). Re-run with --kernel to install it.
+
+== aws-patch Summary ==
+  ...
+  Running Kernel:        5.15.0-100-generic
+  Installed Kernel:      5.15.0-100-generic
+  Available Kernel:      5.15.0-105-generic (not yet installed)
+  Kernel Update:         excluded this run (pass --kernel to include)
+  Reboot Required:       NO
+  Security Updates:      7
+  Patch Status:          completed
+```
+
 ## Safety guarantees
 
 These are structural, not configurable:
@@ -478,6 +539,9 @@ These are structural, not configurable:
 - **Never removes an installed kernel.** `installonly_limit` is explicitly
   overridden to unlimited on every yum/dnf run so a system-wide config
   can't prune kernels as a side effect.
+- **Never installs a new kernel unless you ask.** By default the kernel
+  package is excluded from a run's upgrade entirely; pass `--kernel` to
+  include it.
 - **Never modifies GRUB.** No `update-grub`, `grub2-mkconfig`, or config
   file edits, ever.
 - **Never changes the default boot entry.** No `grub2-set-default`,
@@ -551,6 +615,11 @@ Also validated in CI via `bash -n` and ShellCheck on every push
 **Does aws-patch reboot my instance automatically?**
 Only if you pass `--reboot`, or you say yes to the interactive prompt.
 Never otherwise.
+
+**Does aws-patch install a new kernel automatically?**
+No, not by default. A run excludes the kernel package from its upgrade
+entirely unless you pass `--kernel` (see [`--kernel`](#--kernel)).
+Everything else still patches normally.
 
 **Why did my `curl | sudo bash` install stop with "Aborted by administrator"?**
 Because no flag was passed to authorize the patch, and piping through

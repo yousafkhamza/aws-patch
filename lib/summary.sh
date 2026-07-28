@@ -21,7 +21,8 @@ _AWS_PATCH_SUMMARY_SH_LOADED="true"
 #   Expects the following globals to already be set:
 #     HOSTNAME_FQDN, OS_NAME, PKG_MANAGER, ARCH,
 #     KERNEL_RUNNING, KERNEL_LATEST_INSTALLED, KERNEL_REBOOT_REQUIRED,
-#     SECURITY_UPDATE_COUNT, PATCH_STATUS, AWS_PATCH_LOG_FILE
+#     SECURITY_UPDATE_COUNT, PATCH_STATUS, AWS_PATCH_LOG_FILE,
+#     FLAG_KERNEL (whether --kernel was passed this run)
 #   Missing values are rendered as "unknown" rather than failing, so this
 #   function is safe to call even from --check mode where some fields may
 #   not have been populated.
@@ -47,6 +48,11 @@ summary_render() {
     printf '  %-22s %s\n' "Installed Kernel:"    "${KERNEL_LATEST_INSTALLED:-unknown}"
     if [[ -n "${KERNEL_LATEST_AVAILABLE:-}" && "${KERNEL_LATEST_AVAILABLE}" != "${KERNEL_LATEST_INSTALLED:-}" ]]; then
         printf '  %-22s %s\n' "Available Kernel:" "${KERNEL_LATEST_AVAILABLE} (not yet installed)"
+        if utils_is_true "${FLAG_KERNEL:-false}"; then
+            printf '  %-22s %s\n' "Kernel Update:" "included this run (--kernel)"
+        else
+            printf '  %-22s %s\n' "Kernel Update:" "excluded this run (pass --kernel to include)"
+        fi
     fi
     printf '  %-22s %b\n' "Reboot Required:"     "$reboot_display"
     printf '  %-22s %s\n' "Security Updates:"    "$security_display"
@@ -61,8 +67,13 @@ summary_render() {
         log_warn "A reboot is recommended to run the latest installed kernel."
         log_warn "aws-patch never reboots automatically unless --reboot was passed."
     elif [[ -n "${KERNEL_LATEST_AVAILABLE:-}" && "${KERNEL_LATEST_AVAILABLE}" != "${KERNEL_LATEST_INSTALLED:-}" ]]; then
-        log_warn "A newer kernel (${KERNEL_LATEST_AVAILABLE}) is available but not yet installed."
-        log_warn "Patching will install it and will then require a reboot."
+        if utils_is_true "${FLAG_KERNEL:-false}"; then
+            log_warn "A newer kernel (${KERNEL_LATEST_AVAILABLE}) is available but not yet installed."
+            log_warn "Patching will install it and will then require a reboot."
+        else
+            log_warn "A newer kernel (${KERNEL_LATEST_AVAILABLE}) is available but was not installed this run (--kernel not passed)."
+            log_warn "Run again with --kernel (and optionally --reboot) to install it."
+        fi
     fi
 
     # Persist a machine-parseable summary line to the log for audit trails.

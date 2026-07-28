@@ -11,6 +11,9 @@
 # Options:
 #   --check       Report system/kernel/patch status only; do not install anything
 #   --dry-run     Show what would be done without making changes
+#   --kernel      Also install a newer kernel package if one is available
+#                 (default: kernel package is excluded from this run's
+#                 upgrade so only non-kernel patches are applied)
 #   --reboot      Automatically reboot if required after patching
 #   --yes         Assume "yes" to any interactive prompts (non-interactive mode)
 #   --broken-fix  Automatically repair broken/unmet-dependency package state
@@ -23,6 +26,9 @@
 #   - Never removes installed kernels
 #   - Never modifies GRUB or bootloader configuration
 #   - Never changes the default boot entry
+#   - Never installs a new kernel package unless --kernel is explicitly
+#     passed; a plain patch run applies every other update and leaves the
+#     kernel exactly as it was
 #   - Never force-reboots; reboot only happens if --reboot was explicitly passed
 #
 # Exit codes:
@@ -76,12 +82,14 @@ readonly MIN_DISK_SPACE_MB=1024
 # ---------------------------------------------------------------------------
 FLAG_CHECK="false"
 FLAG_DRY_RUN="false"
+FLAG_KERNEL="false"
 FLAG_REBOOT="false"
 FLAG_YES="false"
 FLAG_BROKEN_FIX="false"
 VERBOSE="false"
 PATCH_STATUS="not_started"
 SECURITY_UPDATE_COUNT=0
+KERNEL_UPDATE_AVAILABLE="false"
 AL_RELEASEVER_UPDATE=""
 AL_RELEASEVER_UPDATES_LIST=""
 AL_RELEASEVER_UPGRADED=""
@@ -100,6 +108,10 @@ Usage:
 Options:
   --check       Report system/kernel/patch status only; do not install anything
   --dry-run     Show what would be done without making changes
+  --kernel      Also install a newer kernel package if one is available
+                (default: kernel is excluded, so a run only applies
+                non-kernel patches -- pair with --reboot to install and
+                reboot into it in one go)
   --reboot      Automatically reboot if required after patching
   --yes         Assume "yes" to any interactive prompts (non-interactive mode)
   --broken-fix  Automatically repair broken/unmet-dependency package state
@@ -112,14 +124,18 @@ Examples:
   sudo aws-patch.sh --check
   sudo aws-patch.sh --dry-run
   sudo aws-patch.sh --yes
-  sudo aws-patch.sh --yes --reboot
+  sudo aws-patch.sh --yes --kernel --reboot
   sudo aws-patch.sh --yes --broken-fix
 
 Safety:
   aws-patch never removes kernels, never modifies GRUB, and never changes
-  the default boot entry. Reboots only happen if --reboot is explicitly
-  passed; otherwise the administrator decides when to reboot. --broken-fix
-  only repairs and reconfigures existing package state (e.g. dpkg --configure
+  the default boot entry. By default, a run excludes the kernel package
+  from its upgrade entirely -- everything else patches normally, and the
+  kernel is left untouched -- so routine patching never forces a reboot
+  decision. Pass --kernel to also install a newer kernel if one's
+  available. Reboots only happen if --reboot is explicitly passed;
+  otherwise the administrator decides when to reboot. --broken-fix only
+  repairs and reconfigures existing package state (e.g. dpkg --configure
   -a, apt --fix-broken install, yum-complete-transaction, dnf clean/retry);
   it never removes an installed kernel and never touches GRUB.
 
@@ -147,6 +163,9 @@ parse_args() {
                 ;;
             --dry-run)
                 FLAG_DRY_RUN="true"
+                ;;
+            --kernel)
+                FLAG_KERNEL="true"
                 ;;
             --reboot)
                 FLAG_REBOOT="true"
@@ -257,8 +276,18 @@ run_preflight() {
     # (KERNEL_LATEST_AVAILABLE) would be silently lost and never reach
     # summary_render. Calling it directly first ensures the global
     # persists in this shell for the rest of the run.
-    kernel_update_available || true
+    if kernel_update_available; then
+        KERNEL_UPDATE_AVAILABLE="true"
+    else
+        KERNEL_UPDATE_AVAILABLE="false"
+    fi
+    export KERNEL_UPDATE_AVAILABLE
     log_info "$(kernel_summary_line)"
+
+    if utils_is_true "$KERNEL_UPDATE_AVAILABLE" && [[ "$FLAG_KERNEL" != "true" ]]; then
+        log_warn "A newer kernel (${KERNEL_LATEST_AVAILABLE}) is available but will NOT be installed this run (--kernel not passed)."
+        log_warn "Pass --kernel (e.g. --yes --kernel --reboot) to install it and optionally reboot into it."
+    fi
 
     # Amazon Linux 2023 only: check whether a newer point-release snapshot
     # is available. Read-only; safe to run even in --check/--dry-run.
@@ -437,8 +466,12 @@ run_patch() {
             log_info "[dry-run] Would run: pm_upgrade_releasever (to ${AL_RELEASEVER_UPDATE})"
         fi
         log_info "[dry-run] Would run: pm_update_repos"
-        log_info "[dry-run] Would run: pm_full_upgrade"
-        log_info "[dry-run] Would run: pm_install_kernel_meta"
+        if [[ "$FLAG_KERNEL" == "true" ]]; then
+            log_info "[dry-run] Would run: pm_full_upgrade (kernel included)"
+            log_info "[dry-run] Would run: pm_install_kernel_meta"
+        else
+            log_info "[dry-run] Would run: pm_full_upgrade_no_kernel (kernel excluded; pass --kernel to include)"
+        fi
         log_info "[dry-run] Would list upgradable packages:"
         pm_list_upgradable || true
         PATCH_STATUS="dry_run_only"
@@ -461,6 +494,11 @@ run_patch() {
     # proceeds against the currently pinned release. In interactive runs
     # (no --yes) with more than one candidate release, prompts the
     # administrator to choose which one; --yes always takes the highest.
+    # NOTE: this step is independent of --kernel/FLAG_KERNEL -- it moves
+    # repo metadata to a new point-release snapshot, which the immediately
+    # following pm_full_upgrade/pm_full_upgrade_no_kernel step then
+    # applies (kernel-excluded, if --kernel wasn't passed) exactly as on
+    # any other run.
     if [[ -n "${AL_RELEASEVER_UPDATE:-}" ]] && declare -F pm_upgrade_releasever >/dev/null 2>&1; then
         local selected_releasever="$AL_RELEASEVER_UPDATE"
         if [[ "$FLAG_YES" != "true" ]]; then
@@ -483,23 +521,39 @@ run_patch() {
         fi
     fi
 
-    ui_spinner_start "Applying package upgrades"
-    if pm_full_upgrade; then
-        ui_spinner_stop ok
-    else
-        ui_spinner_stop fail
-        if ! attempt_broken_fix_and_retry "Applying package upgrades" pm_full_upgrade; then
-            utils_die 1 "Package upgrade failed"
+    if [[ "$FLAG_KERNEL" == "true" ]]; then
+        ui_spinner_start "Applying package upgrades (kernel included)"
+        if pm_full_upgrade; then
+            ui_spinner_stop ok
+        else
+            ui_spinner_stop fail
+            if ! attempt_broken_fix_and_retry "Applying package upgrades" pm_full_upgrade; then
+                utils_die 1 "Package upgrade failed"
+            fi
         fi
-    fi
 
-    ui_spinner_start "Ensuring latest kernel package is installed"
-    if pm_install_kernel_meta; then
-        ui_spinner_stop ok
+        ui_spinner_start "Ensuring latest kernel package is installed"
+        if pm_install_kernel_meta; then
+            ui_spinner_stop ok
+        else
+            ui_spinner_stop fail
+            if ! attempt_broken_fix_and_retry "Ensuring latest kernel package is installed" pm_install_kernel_meta; then
+                log_warn "Kernel metapackage installation reported an issue; continuing"
+            fi
+        fi
     else
-        ui_spinner_stop fail
-        if ! attempt_broken_fix_and_retry "Ensuring latest kernel package is installed" pm_install_kernel_meta; then
-            log_warn "Kernel metapackage installation reported an issue; continuing"
+        ui_spinner_start "Applying package upgrades (kernel excluded)"
+        if pm_full_upgrade_no_kernel; then
+            ui_spinner_stop ok
+        else
+            ui_spinner_stop fail
+            if ! attempt_broken_fix_and_retry "Applying package upgrades" pm_full_upgrade_no_kernel; then
+                utils_die 1 "Package upgrade failed"
+            fi
+        fi
+
+        if utils_is_true "${KERNEL_UPDATE_AVAILABLE:-false}"; then
+            log_warn "Skipped installing kernel ${KERNEL_LATEST_AVAILABLE:-} (--kernel not passed). Re-run with --kernel to install it."
         fi
     fi
 

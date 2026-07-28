@@ -258,6 +258,20 @@ else
     fail "aws-patch.sh --help does not mention --broken-fix"
 fi
 
+if help_output="$(bash "${REPO_ROOT}/aws-patch.sh" --help)" && [[ "$help_output" == *"--kernel"* ]]; then
+    pass "aws-patch.sh --help documents --kernel"
+else
+    fail "aws-patch.sh --help does not mention --kernel"
+fi
+
+if NO_COLOR=1 AWS_PATCH_LOG_FILE="/tmp/aws-patch-test-kernel-flag-$$.log" \
+    bash "${REPO_ROOT}/aws-patch.sh" --check --kernel >/tmp/aws-patch-check-kernel-output-$$.txt 2>&1; then
+    pass "aws-patch.sh --check --kernel is accepted (--kernel parses cleanly)"
+else
+    fail "aws-patch.sh --check --kernel exited non-zero"
+fi
+rm -f "/tmp/aws-patch-check-kernel-output-$$.txt" "/tmp/aws-patch-test-kernel-flag-$$.log"
+
 # ---------------------------------------------------------------------------
 # Section: pm_fix_broken contract -- every pm module must implement it
 # ---------------------------------------------------------------------------
@@ -940,6 +954,170 @@ EOF
         esac
     done < "/tmp/aws-patch-${pm_file}-arch-filter-test-$$.txt"
     rm -f "/tmp/aws-patch-${pm_file}-arch-filter-test-$$.txt"
+done
+
+for pm_file in yum.sh dnf.sh; do
+    (
+        # shellcheck disable=SC1091
+        source "${REPO_ROOT}/lib/logger.sh"
+        # shellcheck disable=SC1091
+        source "${REPO_ROOT}/lib/utils.sh"
+        # shellcheck disable=SC1091
+        source "${REPO_ROOT}/lib/common.sh"
+        # shellcheck disable=SC1090,SC1091
+        source "${REPO_ROOT}/lib/${pm_file}"
+        # shellcheck disable=SC1091
+        source "${REPO_ROOT}/lib/kernel.sh"
+
+        ARCH="x86_64"
+
+        # Reproduces the false "kernel available but not installed"
+        # report seen on Amazon Linux 2023: the same exact kernel is both
+        # running and installed, but `dnf`/`yum list` reports its version
+        # with an RPM epoch prefix ("1:") that `rpm -q --qf` never
+        # includes. Without stripping it, "1:6.1.176-...x86_64" sorts as
+        # version-greater than "6.1.176-...x86_64" even though it's the
+        # identical build.
+        pm_cmd="${pm_file%.sh}"
+        eval "
+        # shellcheck disable=SC2317 # invoked indirectly via pm_get_latest_available_kernel
+        ${pm_cmd}() {
+            case \"\$*\" in
+                *'list available kernel'*|*'list kernel --showduplicates'*|*'list kernel'*)
+                    echo 'kernel.x86_64    1:6.1.176-221.367.amzn2023   amzn2extra-kernel-6.1'
+                    ;;
+            esac
+        }
+        export -f ${pm_cmd}
+        "
+        # shellcheck disable=SC2317 # invoked indirectly via pm_get_installed_kernels
+        rpm() {
+            if [[ "$*" == *'-q kernel'* ]]; then
+                echo '6.1.176-221.367.amzn2023.x86_64'
+            fi
+        }
+        export -f rpm
+
+        available="$(pm_get_latest_available_kernel)"
+        if [[ "$available" == "6.1.176-221.367.amzn2023.x86_64" ]]; then
+            echo "PASS: pm_get_latest_available_kernel (${pm_cmd}) strips RPM epoch prefix"
+        else
+            echo "FAIL: (${pm_cmd}) expected 6.1.176-221.367.amzn2023.x86_64, got '${available}'"
+        fi
+
+        if kernel_update_available; then
+            echo "FAIL: (${pm_cmd}) kernel_update_available falsely reports an update when installed == running == available"
+        else
+            echo "PASS: (${pm_cmd}) kernel_update_available correctly reports no update needed (epoch-only difference)"
+        fi
+    ) > "/tmp/aws-patch-${pm_file}-epoch-test-$$.txt" 2>&1
+
+    while IFS= read -r line; do
+        case "$line" in
+            PASS:*) pass "${line#PASS: }" ;;
+            FAIL:*) fail "${line#FAIL: }" ;;
+        esac
+    done < "/tmp/aws-patch-${pm_file}-epoch-test-$$.txt"
+    rm -f "/tmp/aws-patch-${pm_file}-epoch-test-$$.txt"
+done
+
+# ---------------------------------------------------------------------------
+# Section: --kernel gating (pm_full_upgrade_no_kernel)
+#   Verifies that when --kernel is NOT passed, the kernel package is
+#   genuinely excluded from the upgrade transaction on every supported
+#   package manager, not merely skipped at the reporting layer.
+# ---------------------------------------------------------------------------
+echo "== pm_full_upgrade_no_kernel (--kernel gating) =="
+
+(
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/lib/logger.sh"
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/lib/utils.sh"
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/lib/common.sh"
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/lib/apt.sh"
+
+    held_log="$(mktemp)"
+    # shellcheck disable=SC2317 # invoked indirectly via pm_full_upgrade_no_kernel
+    dpkg-query() {
+        printf 'linux-image-6.8.0-31-generic\nlinux-headers-6.8.0-31-generic\nlinux-modules-6.8.0-31-generic\nvim\n'
+    }
+    export -f dpkg-query
+    # shellcheck disable=SC2317 # invoked indirectly via pm_full_upgrade_no_kernel
+    apt-mark() {
+        echo "$*" >> "$held_log"
+    }
+    export -f apt-mark
+    # shellcheck disable=SC2317 # invoked indirectly via pm_full_upgrade_no_kernel
+    apt-get() { return 0; }
+    export -f apt-get
+
+    pm_full_upgrade_no_kernel >/dev/null
+
+    if grep -q '^hold linux-image-6.8.0-31-generic linux-headers-6.8.0-31-generic linux-modules-6.8.0-31-generic$' "$held_log" \
+        && grep -q '^unhold linux-image-6.8.0-31-generic linux-headers-6.8.0-31-generic linux-modules-6.8.0-31-generic$' "$held_log"; then
+        echo "PASS: pm_full_upgrade_no_kernel (apt) holds kernel packages before upgrading and unholds after"
+    else
+        echo "FAIL: pm_full_upgrade_no_kernel (apt) did not hold/unhold expected packages: $(cat "$held_log")"
+    fi
+
+    if ! grep -q 'vim' "$held_log"; then
+        echo "PASS: pm_full_upgrade_no_kernel (apt) does not hold unrelated packages"
+    else
+        echo "FAIL: pm_full_upgrade_no_kernel (apt) incorrectly held a non-kernel package"
+    fi
+    rm -f "$held_log"
+) > /tmp/aws-patch-apt-no-kernel-test-$$.txt 2>&1
+
+while IFS= read -r line; do
+    case "$line" in
+        PASS:*) pass "${line#PASS: }" ;;
+        FAIL:*) fail "${line#FAIL: }" ;;
+    esac
+done < /tmp/aws-patch-apt-no-kernel-test-$$.txt
+rm -f /tmp/aws-patch-apt-no-kernel-test-$$.txt
+
+for pm_file in yum.sh dnf.sh; do
+    (
+        # shellcheck disable=SC1091
+        source "${REPO_ROOT}/lib/logger.sh"
+        # shellcheck disable=SC1091
+        source "${REPO_ROOT}/lib/utils.sh"
+        # shellcheck disable=SC1091
+        source "${REPO_ROOT}/lib/common.sh"
+        # shellcheck disable=SC1090,SC1091
+        source "${REPO_ROOT}/lib/${pm_file}"
+
+        pm_cmd="${pm_file%.sh}"
+        call_log="$(mktemp)"
+        eval "
+        # shellcheck disable=SC2317 # invoked indirectly via pm_full_upgrade_no_kernel
+        ${pm_cmd}() {
+            echo \"\$*\" >> '${call_log}'
+            return 0
+        }
+        export -f ${pm_cmd}
+        "
+
+        pm_full_upgrade_no_kernel >/dev/null
+
+        if grep -q -- "--exclude=kernel\*" "$call_log"; then
+            echo "PASS: pm_full_upgrade_no_kernel (${pm_cmd}) passes --exclude=kernel* to the upgrade transaction"
+        else
+            echo "FAIL: pm_full_upgrade_no_kernel (${pm_cmd}) did not exclude the kernel package: $(cat "$call_log")"
+        fi
+        rm -f "$call_log"
+    ) > "/tmp/aws-patch-${pm_file}-no-kernel-test-$$.txt" 2>&1
+
+    while IFS= read -r line; do
+        case "$line" in
+            PASS:*) pass "${line#PASS: }" ;;
+            FAIL:*) fail "${line#FAIL: }" ;;
+        esac
+    done < "/tmp/aws-patch-${pm_file}-no-kernel-test-$$.txt"
+    rm -f "/tmp/aws-patch-${pm_file}-no-kernel-test-$$.txt"
 done
 
 # ---------------------------------------------------------------------------

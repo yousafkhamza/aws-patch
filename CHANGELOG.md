@@ -5,6 +5,53 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.10.0] - 2026-07-28
+
+### Added
+- **`--kernel` flag.** By default, `aws-patch` now excludes the kernel
+  package from a run's upgrade entirely: every other package still
+  patches normally, but the kernel is left exactly as it was, so routine
+  patching never forces a reboot decision. Pass `--kernel` to also
+  install a newer kernel if one's available (pairs naturally with
+  `--reboot`: `sudo aws-patch --yes --kernel --reboot`).
+  - `lib/apt.sh`: new `pm_full_upgrade_no_kernel()` — holds the
+    currently-installed `linux-image-*`/`linux-headers-*`/
+    `linux-modules-*` packages via `apt-mark hold` for the duration of
+    the upgrade and always unholds them after, success or failure.
+  - `lib/yum.sh` / `lib/dnf.sh`: new `pm_full_upgrade_no_kernel()` —
+    runs the upgrade transaction with native `--exclude='kernel*'`.
+  - `aws-patch.sh`: `run_patch()` now branches on `--kernel`; when
+    excluded, a clear summary line and warning report that a kernel
+    update was available but skipped, and how to include it next run.
+  - `lib/summary.sh`: new `Kernel Update:` field, and the final warning
+    now distinguishes "will install" from "excluded this run (pass
+    --kernel to include)".
+  - This never changes what happens to a kernel that's already
+    installed -- no package is ever removed and GRUB is never touched,
+    same guarantees as always.
+- New test coverage in `tests/run_tests.sh` for `--kernel` flag parsing/
+  help documentation and `pm_full_upgrade_no_kernel` behavior on all
+  three package managers (`== pm_full_upgrade_no_kernel (--kernel
+  gating) ==`).
+
+## [1.9.1] - 2026-07-28
+
+### Fixed
+- **False "kernel available but not installed" report on RHEL-family
+  systems (yum/dnf), most visibly on Amazon Linux 2023.** When a kernel
+  package carries a non-zero RPM epoch, `yum`/`dnf list` reports its
+  version with an `epoch:` prefix (e.g. `1:6.1.176-221.367.amzn2023`),
+  but `rpm -q --qf '%{VERSION}-%{RELEASE}...'` (used to determine what's
+  actually installed) never includes the epoch. Left unstripped, that
+  bare `1:` prefix sorted as version-*greater* than the plain version
+  string under `sort -V`, so the exact same installed/running kernel
+  was misreported as a newer "available" kernel on every single run --
+  even immediately after patching, with nothing left to update.
+  `lib/yum.sh` and `lib/dnf.sh` now strip the epoch prefix from every
+  kernel version candidate before comparison. New regression tests added
+  reproducing the exact scenario (installed == running == available,
+  differing only by epoch prefix).
+
 ## [1.9.0] - 2026-07-28
 
 ### Added

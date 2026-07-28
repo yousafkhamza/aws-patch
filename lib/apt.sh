@@ -12,6 +12,7 @@
 #   pm_update_repos
 #   pm_upgrade
 #   pm_full_upgrade
+#   pm_full_upgrade_no_kernel
 #   pm_security_only
 #   pm_install_kernel_meta
 #   pm_get_installed_kernels
@@ -58,6 +59,47 @@ pm_upgrade() {
 # ---------------------------------------------------------------------------
 pm_full_upgrade() {
     common_retry 2 5 -- apt-get "${APT_OPTS[@]}" full-upgrade
+}
+
+# ---------------------------------------------------------------------------
+# pm_full_upgrade_no_kernel
+#   Same as pm_full_upgrade, but the running kernel package (and its
+#   headers/modules) is left exactly as-is -- used when --kernel was NOT
+#   passed on the command line, so a patch run applies every other
+#   update without also pulling in a new kernel (and the reboot that
+#   would require).
+#
+#   apt has no per-invocation "--exclude" for upgrade/full-upgrade, so
+#   this uses the standard, fully reversible idiom instead: apt-mark
+#   hold the currently-installed kernel-family packages, run the normal
+#   full-upgrade, then unhold them again -- in a trap, so an interrupted
+#   or failed run can never leave a package stuck on hold. This never
+#   removes a package, never touches GRUB, and never changes what's
+#   currently installed; it only prevents apt from proposing a *new*
+#   kernel package during this specific transaction.
+# ---------------------------------------------------------------------------
+pm_full_upgrade_no_kernel() {
+    local held_pkgs=() rc=0
+    mapfile -t held_pkgs < <(dpkg-query -W -f='${Package}\n' 2>/dev/null \
+        | grep -E '^linux-(image|headers|modules|modules-extra)-[0-9]' || true)
+
+    if ((${#held_pkgs[@]} == 0)); then
+        # Nothing versioned to hold (e.g. a minimal/virtualized image using
+        # only a meta-package); fall back to the normal full-upgrade as-is.
+        pm_full_upgrade
+        return $?
+    fi
+
+    log_debug "Holding kernel packages for this upgrade: ${held_pkgs[*]}"
+    apt-mark hold "${held_pkgs[@]}" >/dev/null 2>&1 || true
+
+    common_retry 2 5 -- apt-get "${APT_OPTS[@]}" full-upgrade || rc=$?
+
+    # Always unhold, whether the upgrade succeeded or failed -- a package
+    # must never come out of this function still held.
+    apt-mark unhold "${held_pkgs[@]}" >/dev/null 2>&1 || true
+
+    return "$rc"
 }
 
 # ---------------------------------------------------------------------------

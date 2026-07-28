@@ -11,6 +11,7 @@
 #   pm_update_repos
 #   pm_upgrade
 #   pm_full_upgrade
+#   pm_full_upgrade_no_kernel
 #   pm_security_only
 #   pm_install_kernel_meta
 #   pm_get_installed_kernels
@@ -59,6 +60,19 @@ pm_upgrade() {
 # ---------------------------------------------------------------------------
 pm_full_upgrade() {
     common_retry 2 5 -- yum update -y --obsoletes
+}
+
+# ---------------------------------------------------------------------------
+# pm_full_upgrade_no_kernel
+#   Same as pm_full_upgrade, but the kernel package itself is excluded
+#   from this transaction via yum's native --exclude -- used when
+#   --kernel was NOT passed on the command line, so a patch run applies
+#   every other update without also pulling in a new kernel (and the
+#   reboot that would require). Read-only w.r.t. the kernel: never
+#   removes or modifies an installed kernel package.
+# ---------------------------------------------------------------------------
+pm_full_upgrade_no_kernel() {
+    common_retry 2 5 -- yum update -y --obsoletes --exclude='kernel*'
 }
 
 # ---------------------------------------------------------------------------
@@ -167,6 +181,13 @@ pm_get_installed_kernels() {
 #   a judgment about install state.
 #   Output is normalized to match pm_get_installed_kernels' format
 #   ("<version>-<release>.<arch>") so the two are directly comparable.
+#   The RPM epoch prefix (e.g. "1:") is stripped from each candidate
+#   before comparison: `dnf`/`yum list` includes it when a package has
+#   a non-zero epoch, but `rpm -q --qf '%{VERSION}-%{RELEASE}...'` in
+#   pm_get_installed_kernels never does. Left in, the bare "1:" prefix
+#   sorts as version-greater under `sort -V` than a plain version
+#   string, so an installed kernel would be misreported as a newer
+#   "available" one every single run, even with nothing to update.
 # ---------------------------------------------------------------------------
 pm_get_latest_available_kernel() {
     local candidates ver kernel_arch
@@ -182,10 +203,10 @@ pm_get_latest_available_kernel() {
     kernel_arch="${ARCH:-$(uname -m)}"
 
     candidates="$(yum list kernel --showduplicates -q 2>/dev/null \
-        | awk -v arch="$kernel_arch" '$0 ~ "^kernel\\." arch "([[:space:]]|$)" {print $2}' || true)"
+        | awk -v arch="$kernel_arch" '$0 ~ "^kernel\\." arch "([[:space:]]|$)" {print $2}' | sed -E 's/^[0-9]+://' || true)"
     candidates+=$'\n'
     candidates+="$(yum check-update kernel -q 2>&1 \
-        | awk -v arch="$kernel_arch" '$0 ~ "^kernel\\." arch "([[:space:]]|$)" {print $2}' || true)"
+        | awk -v arch="$kernel_arch" '$0 ~ "^kernel\\." arch "([[:space:]]|$)" {print $2}' | sed -E 's/^[0-9]+://' || true)"
 
     ver="$(printf '%s\n' "$candidates" | grep -E '.' | sort -V | tail -n1 || true)"
 
