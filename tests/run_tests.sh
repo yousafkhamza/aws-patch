@@ -1185,6 +1185,196 @@ for pm_file in yum.sh dnf.sh; do
 done
 
 # ---------------------------------------------------------------------------
+# Section: stale kernel database entry (phantom "installed" kernel)
+#   Reproduces a real-world incident: a package manager's database
+#   records a kernel version as installed, but its boot files were never
+#   actually written (e.g. an interrupted transaction). aws-patch must
+#   detect this and stop recommending a reboot that cannot possibly load
+#   that kernel, instead pointing at the actual remediation.
+# ---------------------------------------------------------------------------
+echo "== stale kernel database entry (missing /boot files) =="
+
+(
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/lib/logger.sh"
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/lib/utils.sh"
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/lib/kernel.sh"
+
+    boot_dir="$(mktemp -d)"
+    # shellcheck disable=SC2030,SC2031 # intentionally subshell-scoped, like every other fake-env var in this test file
+    export AWS_PATCH_BOOT_DIR="$boot_dir"
+
+    # shellcheck disable=SC2317 # invoked indirectly via kernel_get_latest_installed
+    pm_get_installed_kernels() {
+        printf '6.1.166-197.305.amzn2023.x86_64\n6.1.176-223.369.amzn2023.x86_64\n'
+    }
+    # shellcheck disable=SC2317 # invoked indirectly via kernel_reboot_required
+    kernel_get_running() { echo "6.1.166-197.305.amzn2023.x86_64"; }
+
+    # Case A: only the OLD kernel's boot files exist on disk (the real
+    # incident) -- the "latest installed" kernel per the package
+    # manager has no vmlinuz at all.
+    touch "${boot_dir}/vmlinuz-6.1.166-197.305.amzn2023.x86_64"
+
+    if kernel_reboot_required; then
+        if utils_is_true "${KERNEL_INSTALL_INCOMPLETE:-false}"; then
+            echo "PASS: stale entry (missing boot files) sets KERNEL_INSTALL_INCOMPLETE=true"
+        else
+            echo "FAIL: expected KERNEL_INSTALL_INCOMPLETE=true when the latest-installed kernel has no boot files"
+        fi
+    else
+        echo "FAIL: expected kernel_reboot_required to still return true (version mismatch is real) even with a stale entry"
+    fi
+
+    summary_line="$(kernel_summary_line)"
+    if [[ "$summary_line" == *"STALE ENTRY"* ]]; then
+        echo "PASS: kernel_summary_line reports STALE ENTRY instead of a plain misleading YES"
+    else
+        echo "FAIL: kernel_summary_line did not flag the stale entry: ${summary_line}"
+    fi
+
+    # Case B: the "latest installed" kernel's boot files DO exist --
+    # must be treated as a completely normal reboot-required case, with
+    # no integrity warning at all.
+    touch "${boot_dir}/vmlinuz-6.1.176-223.369.amzn2023.x86_64"
+    if kernel_reboot_required; then
+        if ! utils_is_true "${KERNEL_INSTALL_INCOMPLETE:-false}"; then
+            echo "PASS: real installed kernel with boot files present -> no false-positive integrity warning"
+        else
+            echo "FAIL: KERNEL_INSTALL_INCOMPLETE incorrectly true when boot files are present"
+        fi
+    else
+        echo "FAIL: expected reboot-required (version mismatch) with boot files present"
+    fi
+
+    # Case C: versions match (no reboot needed at all) -> integrity flag
+    # must stay false regardless of what's on disk; there's nothing to
+    # flag when there's no pending kernel in the first place.
+    # shellcheck disable=SC2317 # invoked indirectly via kernel_reboot_required
+    kernel_get_running() { echo "6.1.166-197.305.amzn2023.x86_64"; }
+    # shellcheck disable=SC2317 # invoked indirectly via kernel_get_latest_installed
+    pm_get_installed_kernels() { printf '6.1.166-197.305.amzn2023.x86_64\n'; }
+    rm -f "${boot_dir}"/vmlinuz-*
+    if ! kernel_reboot_required && ! utils_is_true "${KERNEL_INSTALL_INCOMPLETE:-false}"; then
+        echo "PASS: no version mismatch -> no reboot required and no integrity warning, regardless of missing files"
+    else
+        echo "FAIL: expected no reboot required and no integrity warning when versions already match"
+    fi
+
+    rm -rf "$boot_dir"
+) > /tmp/aws-patch-stale-kernel-test-$$.txt 2>&1
+
+while IFS= read -r line; do
+    case "$line" in
+        PASS:*) pass "${line#PASS: }" ;;
+        FAIL:*) fail "${line#FAIL: }" ;;
+    esac
+done < /tmp/aws-patch-stale-kernel-test-$$.txt
+rm -f /tmp/aws-patch-stale-kernel-test-$$.txt
+
+# ---------------------------------------------------------------------------
+# Section: GRUB default boot entry mismatch
+#   A kernel can be genuinely, correctly installed (real boot files
+#   present, not a stale entry) and STILL not be what a reboot would
+#   actually load, if GRUB's own default boot entry was never updated to
+#   point at it. This is the check that would have caught the closest
+#   near-miss in the real incident this whole feature is modeled on.
+# ---------------------------------------------------------------------------
+echo "== GRUB default boot entry mismatch =="
+
+(
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/lib/logger.sh"
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/lib/utils.sh"
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/lib/kernel.sh"
+
+    boot_dir="$(mktemp -d)"
+    # shellcheck disable=SC2030,SC2031 # intentionally subshell-scoped, like every other fake-env var in this test file
+    export AWS_PATCH_BOOT_DIR="$boot_dir"
+    touch "${boot_dir}/vmlinuz-6.1.166-197.305.amzn2023.x86_64"
+    touch "${boot_dir}/vmlinuz-6.1.176-223.369.amzn2023.x86_64"
+
+    # shellcheck disable=SC2317 # invoked indirectly via kernel_get_latest_installed
+    pm_get_installed_kernels() {
+        printf '6.1.166-197.305.amzn2023.x86_64\n6.1.176-223.369.amzn2023.x86_64\n'
+    }
+    # shellcheck disable=SC2317 # invoked indirectly via kernel_reboot_required
+    kernel_get_running() { echo "6.1.166-197.305.amzn2023.x86_64"; }
+
+    # Case A: grubby exists and its default still points at the OLD
+    # kernel -- the exact near-miss from the real incident. Both boot
+    # files are present (this is NOT a stale entry), but a reboot would
+    # not actually change anything.
+    # shellcheck disable=SC2317 # invoked indirectly via _kernel_grub_default_matches
+    grubby() {
+        [[ "$1" == "--default-kernel" ]] && echo "${AWS_PATCH_BOOT_DIR}/vmlinuz-6.1.166-197.305.amzn2023.x86_64"
+    }
+    export -f grubby
+
+    if kernel_reboot_required; then
+        if utils_is_true "${KERNEL_BOOT_DEFAULT_MISMATCH:-false}" && ! utils_is_true "${KERNEL_INSTALL_INCOMPLETE:-false}"; then
+            echo "PASS: GRUB default still pointing at the old kernel is detected as KERNEL_BOOT_DEFAULT_MISMATCH (not misreported as a stale entry)"
+        else
+            echo "FAIL: expected KERNEL_BOOT_DEFAULT_MISMATCH=true, KERNEL_INSTALL_INCOMPLETE=false; got mismatch=${KERNEL_BOOT_DEFAULT_MISMATCH:-unset} incomplete=${KERNEL_INSTALL_INCOMPLETE:-unset}"
+        fi
+    else
+        echo "FAIL: expected kernel_reboot_required to still return true (real version mismatch)"
+    fi
+
+    summary_line="$(kernel_summary_line)"
+    if [[ "$summary_line" == *"GRUB DEFAULT MISMATCH"* ]]; then
+        echo "PASS: kernel_summary_line reports GRUB DEFAULT MISMATCH distinctly"
+    else
+        echo "FAIL: kernel_summary_line did not flag the GRUB mismatch: ${summary_line}"
+    fi
+
+    # Case B: grubby exists and its default correctly points at the NEW
+    # kernel -- completely normal, no risk, must not be flagged.
+    # shellcheck disable=SC2317 # invoked indirectly via _kernel_grub_default_matches
+    grubby() {
+        [[ "$1" == "--default-kernel" ]] && echo "${AWS_PATCH_BOOT_DIR}/vmlinuz-6.1.176-223.369.amzn2023.x86_64"
+    }
+    export -f grubby
+    if kernel_reboot_required && ! utils_is_true "${KERNEL_BOOT_DEFAULT_MISMATCH:-false}"; then
+        echo "PASS: GRUB default correctly pointing at the new kernel -> no false-positive mismatch"
+    else
+        echo "FAIL: expected no mismatch when GRUB default already points at the new kernel"
+    fi
+
+    # Case C: grubby not present at all (e.g. Debian/Ubuntu without it
+    # installed) -- must never block a reboot on an unverifiable system;
+    # the check simply has nothing to say.
+    unset -f grubby
+    # shellcheck disable=SC2317
+    command() {
+        if [[ "$1" == "-v" && "$2" == "grubby" ]]; then
+            return 1
+        fi
+        builtin command "$@"
+    }
+    if kernel_reboot_required && ! utils_is_true "${KERNEL_BOOT_DEFAULT_MISMATCH:-false}"; then
+        echo "PASS: grubby unavailable -> unverifiable, never blocks/flags a reboot"
+    else
+        echo "FAIL: expected no mismatch flag when grubby isn't available to check"
+    fi
+    unset -f command
+
+    rm -rf "$boot_dir"
+) > /tmp/aws-patch-grub-mismatch-test-$$.txt 2>&1
+
+while IFS= read -r line; do
+    case "$line" in
+        PASS:*) pass "${line#PASS: }" ;;
+        FAIL:*) fail "${line#FAIL: }" ;;
+    esac
+done < /tmp/aws-patch-grub-mismatch-test-$$.txt
+rm -f /tmp/aws-patch-grub-mismatch-test-$$.txt
+
+# ---------------------------------------------------------------------------
 # Results
 # ---------------------------------------------------------------------------
 echo ""

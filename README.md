@@ -577,6 +577,36 @@ This is automatic and requires no flag; it just means the
 output and the final summary can no longer be thrown off by a
 non-bootable package that happened to sort highest.
 
+**Stale database entry detection (since 1.10.2):** a package manager's
+own database can end up recording a kernel as "installed" when its
+actual boot files were never written -- almost always caused by a
+kernel transaction that got interrupted partway through. Before ever
+recommending a reboot, `aws-patch` now checks that the "latest
+installed" kernel actually has a `/boot/vmlinuz-<version>` file on
+disk. If it doesn't, the summary reports `Reboot Required: STALE ENTRY`
+instead of a misleading plain `YES`, `--reboot` is skipped entirely
+(rebooting can't load a kernel whose files don't exist), and the exact
+remediation is logged.
+
+**GRUB default mismatch detection (since 1.10.3, RHEL-family only):** a
+kernel can be genuinely, correctly installed and still not be what a
+reboot would actually load, if GRUB's own default boot entry was never
+updated to point at it (normally automatic via the kernel package's own
+scriptlets, but can fail to complete after an interrupted transaction).
+Where `grubby` is available, `aws-patch` checks the current default
+before recommending a reboot; a mismatch reports
+`Reboot Required: GRUB DEFAULT MISMATCH`, skips `--reboot` (it would
+just restart into the same kernel), and logs the exact `grubby
+--set-default` command to run first. Unverifiable on systems without
+`grubby` (most Debian/Ubuntu installs) -- there it's simply not checked,
+never blocked.
+
+See
+[docs/troubleshooting.md#stale-kernel-database-entry](docs/troubleshooting.md#stale-kernel-database-entry)
+and
+[docs/troubleshooting.md#grub-default-not-updated-to-the-new-kernel](docs/troubleshooting.md#grub-default-not-updated-to-the-new-kernel)
+for the full recovery steps.
+
 ## AWS recovery guidance
 
 Before patching, `aws-patch` prints (but never executes) recommended AWS
@@ -629,6 +659,17 @@ run unattended.
 
 **Does aws-patch delete old kernels to save disk space?**
 No, never. Kernel pruning is explicitly disabled on every run.
+
+**What if the package manager thinks a kernel is installed but it isn't really there?**
+`aws-patch` verifies the "latest installed" kernel actually has boot
+files on disk, and (where `grubby` is available) that GRUB's default
+actually points at it, before ever recommending a reboot. If either
+check fails, the summary reports `STALE ENTRY` or `GRUB DEFAULT
+MISMATCH` instead of a plain `YES`, `--reboot` is skipped, and the fix
+is logged — see
+[docs/troubleshooting.md#stale-kernel-database-entry](docs/troubleshooting.md#stale-kernel-database-entry)
+and
+[docs/troubleshooting.md#grub-default-not-updated-to-the-new-kernel](docs/troubleshooting.md#grub-default-not-updated-to-the-new-kernel).
 
 **Can I run this outside of AWS?**
 Yes. Detection and patching logic work on any matching OS. Only the

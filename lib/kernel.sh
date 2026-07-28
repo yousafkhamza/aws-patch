@@ -8,6 +8,9 @@
 #   - call grub2-set-default, grub2-reboot, update-grub, or similar
 #   - remove/purge any installed kernel package
 #   - change the default boot entry
+# Read-only inspection of the current GRUB default (e.g. `grubby
+# --default-kernel`) is fine -- it's writes that are forbidden, so that
+# a --reboot can be sanity-checked against reality before it happens.
 #
 # It answers exactly one question: is the currently running kernel the
 # same as the newest kernel installed on disk? If not, a reboot is
@@ -34,6 +37,14 @@
 #   kernel_get_latest_available -> echoes newest kernel version offered by the
 #                                   repo (installed or not); empty if unknown
 #   kernel_reboot_required      -> returns 0 if reboot recommended, 1 otherwise
+#                                   (also sets KERNEL_INSTALL_INCOMPLETE if the
+#                                   "latest installed" kernel's boot files are
+#                                   missing from /boot -- see
+#                                   _kernel_boot_files_present below -- and
+#                                   KERNEL_BOOT_DEFAULT_MISMATCH if the boot
+#                                   files exist but GRUB's current default
+#                                   doesn't point at them, where verifiable --
+#                                   see _kernel_grub_default_matches below)
 #   kernel_update_available     -> returns 0 if a newer kernel than what's
 #                                   currently installed is available in the repo
 #   kernel_summary_line         -> echoes a human-readable one-line summary
@@ -123,15 +134,122 @@ kernel_update_available() {
 }
 
 # ---------------------------------------------------------------------------
+# _kernel_boot_files_present <version>
+#   Private helper (not part of the pm_* or kernel_* public contract).
+#   Sanity-checks that a kernel version the package manager reports as
+#   "installed" actually has a bootable vmlinuz file on disk at
+#   /boot/vmlinuz-<version> -- the exact file GRUB/BLS boot entries point
+#   at, and the same naming convention used by every supported distro
+#   (Debian/Ubuntu and every RPM-based family: Amazon Linux, RHEL, Rocky,
+#   AlmaLinux, CentOS). Returns 0 if present, 1 if missing.
+#
+#   This exists because a package manager's own database can end up
+#   recording a kernel as "installed" when its actual files were never
+#   written -- most commonly a kernel transaction interrupted partway
+#   through (Ctrl+C/Ctrl+Z, an OOM kill, a lost SSH session). Without
+#   this check, aws-patch would report "reboot required" for a kernel
+#   that physically cannot be booted into -- a reboot would just return
+#   to the exact same running kernel, and an administrator has no way to
+#   tell that from the summary alone.
+# ---------------------------------------------------------------------------
+_kernel_boot_files_present() {
+    local version="$1"
+    [[ -n "$version" ]] || return 1
+    [[ -e "${AWS_PATCH_BOOT_DIR:-/boot}/vmlinuz-${version}" ]]
+}
+
+# ---------------------------------------------------------------------------
+# _kernel_grub_default_matches <version>
+#   Private helper. Read-only GRUB inspection ONLY (see file header) --
+#   asks `grubby` what the current default boot entry is and compares it
+#   against the kernel version we expect a reboot to load. This is the
+#   check that would have caught the exact real-world failure this
+#   function exists for: a kernel installs cleanly with real boot files
+#   present, but the automatic scriptlet chain that's supposed to also
+#   set it as the default boot entry doesn't complete -- so a reboot
+#   silently restarts into the SAME kernel that's already running, and
+#   nothing about the summary would otherwise reveal that in advance.
+#
+#   Only reliably verifiable where `grubby` is present (RHEL-family:
+#   Amazon Linux, RHEL, Rocky, AlmaLinux, CentOS -- standard tooling
+#   there). Debian/Ubuntu doesn't ship a grubby equivalent by default;
+#   rather than guess by parsing grub.cfg (fragile, distro-version
+#   dependent, and a false positive here would block a perfectly good
+#   reboot), this is left unverifiable there and never blocks anything.
+#
+#   Echoes one of: "match" (default already points at $version),
+#   "mismatch" (default points elsewhere -- reboot would not help),
+#   "unknown" (grubby unavailable or its output couldn't be parsed --
+#   nothing to act on either way).
+# ---------------------------------------------------------------------------
+_kernel_grub_default_matches() {
+    local version="$1"
+    local default_path
+
+    if ! command -v grubby >/dev/null 2>&1; then
+        printf 'unknown'
+        return 0
+    fi
+
+    default_path="$(grubby --default-kernel 2>/dev/null || true)"
+    if [[ -z "$default_path" ]]; then
+        printf 'unknown'
+        return 0
+    fi
+
+    if [[ "$default_path" == "${AWS_PATCH_BOOT_DIR:-/boot}/vmlinuz-${version}" ]]; then
+        printf 'match'
+    else
+        printf 'mismatch'
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # kernel_reboot_required
 #   Returns 0 (true) if the running kernel differs from the latest
 #   installed kernel, 1 (false) otherwise. Sets globals:
-#     KERNEL_RUNNING, KERNEL_LATEST_INSTALLED, KERNEL_REBOOT_REQUIRED
+#     KERNEL_RUNNING, KERNEL_LATEST_INSTALLED, KERNEL_REBOOT_REQUIRED,
+#     KERNEL_INSTALL_INCOMPLETE, KERNEL_BOOT_DEFAULT_MISMATCH
 # ---------------------------------------------------------------------------
 kernel_reboot_required() {
     KERNEL_RUNNING="$(kernel_get_running)"
     KERNEL_LATEST_INSTALLED="$(kernel_get_latest_installed)"
     export KERNEL_RUNNING KERNEL_LATEST_INSTALLED
+
+    # Integrity check: if the package manager thinks a different kernel
+    # is installed but that kernel has no boot files on disk, this is a
+    # stale/phantom database entry -- not a real pending kernel. Flag it
+    # distinctly so the summary and reboot messaging can tell the truth
+    # instead of recommending a reboot that cannot possibly help.
+    KERNEL_INSTALL_INCOMPLETE="false"
+    if [[ "$KERNEL_RUNNING" != "$KERNEL_LATEST_INSTALLED" ]] \
+        && ! _kernel_boot_files_present "$KERNEL_LATEST_INSTALLED"; then
+        KERNEL_INSTALL_INCOMPLETE="true"
+        log_warn "Kernel ${KERNEL_LATEST_INSTALLED} is recorded as installed, but ${AWS_PATCH_BOOT_DIR:-/boot}/vmlinuz-${KERNEL_LATEST_INSTALLED} does not exist."
+        log_warn "This is a stale package-database entry (usually from an interrupted kernel transaction) -- rebooting will NOT load this kernel."
+        log_warn "See docs/troubleshooting.md#stale-kernel-database-entry for how to clear it."
+    fi
+    export KERNEL_INSTALL_INCOMPLETE
+
+    # Second, distinct risk check: boot files DO exist, but is GRUB's
+    # current default actually set to boot them? Only evaluated when
+    # there's a real pending kernel to check in the first place (not a
+    # stale entry, and a version mismatch actually exists) -- and only
+    # acted on where verifiable (see _kernel_grub_default_matches).
+    KERNEL_BOOT_DEFAULT_MISMATCH="false"
+    if [[ "$KERNEL_RUNNING" != "$KERNEL_LATEST_INSTALLED" ]] \
+        && ! utils_is_true "$KERNEL_INSTALL_INCOMPLETE"; then
+        case "$(_kernel_grub_default_matches "$KERNEL_LATEST_INSTALLED")" in
+            mismatch)
+                KERNEL_BOOT_DEFAULT_MISMATCH="true"
+                log_warn "Kernel ${KERNEL_LATEST_INSTALLED} is installed, but GRUB's current default boot entry does not point at it."
+                log_warn "Rebooting now would very likely restart into the exact same kernel that's already running."
+                log_warn "aws-patch never modifies GRUB -- set the default yourself first: sudo grubby --set-default ${AWS_PATCH_BOOT_DIR:-/boot}/vmlinuz-${KERNEL_LATEST_INSTALLED}"
+                log_warn "See docs/troubleshooting.md#grub-default-not-updated-to-the-new-kernel for details."
+                ;;
+        esac
+    fi
+    export KERNEL_BOOT_DEFAULT_MISMATCH
 
     # Also respect the distro-native indicator when available, since
     # version-string comparison alone can be unreliable across kernel
@@ -166,7 +284,13 @@ kernel_reboot_required() {
 kernel_summary_line() {
     local line
     if kernel_reboot_required; then
-        line="Running: ${KERNEL_RUNNING} | Latest installed: ${KERNEL_LATEST_INSTALLED} | Reboot required: YES"
+        if utils_is_true "${KERNEL_INSTALL_INCOMPLETE:-false}"; then
+            line="Running: ${KERNEL_RUNNING} | Latest installed: ${KERNEL_LATEST_INSTALLED} | Reboot required: STALE ENTRY (boot files missing, reboot won't help)"
+        elif utils_is_true "${KERNEL_BOOT_DEFAULT_MISMATCH:-false}"; then
+            line="Running: ${KERNEL_RUNNING} | Latest installed: ${KERNEL_LATEST_INSTALLED} | Reboot required: GRUB DEFAULT MISMATCH (reboot won't load it -- see below)"
+        else
+            line="Running: ${KERNEL_RUNNING} | Latest installed: ${KERNEL_LATEST_INSTALLED} | Reboot required: YES"
+        fi
     else
         line="Running: ${KERNEL_RUNNING} | Latest installed: ${KERNEL_LATEST_INSTALLED} | Reboot required: NO"
     fi

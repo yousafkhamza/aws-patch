@@ -290,6 +290,134 @@ RHEL/CentOS 7 (Amazon Linux 2 ships equivalent support natively).
   security-only, and logs the fallback clearly.
 - You can pre-install the plugin yourself: `sudo yum install -y yum-plugin-security`.
 
+## Stale kernel database entry
+
+**Symptom:** the summary shows `Reboot Required: STALE ENTRY` (instead
+of the usual `YES`/`NO`), with a message like:
+
+```
+✖ Kernel 6.1.176-223.369.amzn2023.x86_64 is recorded as installed, but its boot files are missing from /boot.
+✖ This is a stale package-database entry, not a real pending kernel -- rebooting will NOT change what kernel loads.
+```
+
+**Cause:** the package manager's own database says a kernel is
+installed, but that kernel's actual boot files (`/boot/vmlinuz-<version>`)
+were never written to disk. This is almost always caused by a kernel
+transaction that was interrupted partway through -- `Ctrl+C`/`Ctrl+Z` on
+a `dnf upgrade`/`apt full-upgrade` mid-write, an SSH session dropping,
+or the OOM killer terminating the transaction. The database entry
+survives; the files never made it. Rebooting cannot fix this -- GRUB has
+nothing new to boot into, so it will simply restart into the exact same
+kernel that's already running. This is exactly why `aws-patch` detects
+and flags it distinctly instead of recommending a reboot that would
+accomplish nothing.
+
+**Resolution:**
+
+1. Confirm the diagnosis -- the "installed" kernel's boot files really
+   are missing, and (usually) it doesn't even appear in the repo's
+   current package listing anymore, since the repo has moved on since
+   whatever snapshot the interrupted transaction pulled it from:
+
+   ```bash
+   ls -la /boot/vmlinuz-<the-version-from-the-summary>
+   # RHEL-family:
+   dnf list --showduplicates kernel   # or: yum list --showduplicates kernel
+   ```
+
+2. Remove the stale database entry only -- `--justdb` never touches
+   files, so this is safe even though the files don't exist:
+
+   ```bash
+   # RHEL-family (Amazon Linux, RHEL, Rocky, AlmaLinux):
+   sudo rpm -e --justdb kernel-<the-version-from-the-summary>
+
+   # Debian/Ubuntu:
+   sudo dpkg --remove --force-remove-reinstreq linux-image-<the-version-from-the-summary>
+   ```
+
+3. Confirm it's gone, then install a real kernel fresh (not a
+   "reinstall" of the now-gone phantom version):
+
+   ```bash
+   rpm -qa | grep ^kernel-6            # RHEL-family: should no longer list the stale version
+   sudo dnf install -y kernel --setopt=installonly_limit=0   # or: yum install -y kernel
+   # Debian/Ubuntu:
+   dpkg -l | grep linux-image          # should no longer list the stale version
+   sudo apt-get install -y linux-image-generic   # or your kernel flavor package
+   ```
+
+4. Verify the new kernel actually has real boot files this time, then
+   set it as the default and reboot:
+
+   ```bash
+   ls -la /boot/vmlinuz-* /boot/initramfs-* /boot/initrd.img-*   # (path names vary by distro)
+   sudo grubby --info=ALL              # RHEL-family
+   sudo grubby --set-default /boot/vmlinuz-<new-version>
+   sudo reboot
+   ```
+
+5. After reboot, `aws-patch --check` should report a normal
+   `Reboot Required: NO` with `Running Kernel` matching `Installed
+   Kernel` -- confirming the fix actually took.
+
+**If step 3 shows there's no newer kernel available at all** (as can
+happen -- the phantom entry was never real to begin with, and the repo
+never had anything past what's currently running), there's nothing
+further to do: the running kernel already is the latest one, and the
+summary will read `Reboot Required: NO` once the stale entry is cleared.
+
+## GRUB default not updated to the new kernel
+
+**Symptom:** the summary shows `Reboot Required: GRUB DEFAULT MISMATCH`,
+with a message like:
+
+```
+✖ Kernel 6.1.176-223.369.amzn2023.x86_64 is installed, but GRUB's current default does not point at it.
+✖ Rebooting now would very likely restart into the exact same kernel that's already running.
+```
+
+**Cause:** unlike a [stale database entry](#stale-kernel-database-entry),
+this kernel is genuinely, correctly installed -- real boot files exist
+on disk. What didn't happen is the automatic step that's supposed to
+also mark it as the default boot entry (normally handled by the kernel
+package's own post-install scriptlets calling `kernel-install`/`grubby`
+under the hood -- not something `aws-patch` does itself; it never
+modifies GRUB, by design). If that scriptlet chain didn't complete
+cleanly (again, often traceable to an earlier interrupted transaction),
+the new kernel sits on disk unused while GRUB keeps booting the old one.
+
+**Resolution (RHEL-family only -- this check requires `grubby`, which
+ships standard on Amazon Linux, RHEL, Rocky, and AlmaLinux):**
+
+```bash
+# Confirm what GRUB currently thinks is default, and what's actually available:
+sudo grubby --default-kernel
+sudo grubby --info=ALL
+
+# Point it at the correct kernel:
+sudo grubby --set-default /boot/vmlinuz-<the-version-from-the-summary>
+
+# Confirm it took:
+sudo grubby --default-kernel
+
+sudo reboot
+```
+
+After reboot, `aws-patch --check` should report `Reboot Required: NO`
+with `Running Kernel` now matching `Installed Kernel`.
+
+**Debian/Ubuntu note:** this specific check is only evaluated where
+`grubby` is available, since Debian/Ubuntu doesn't ship an equivalent
+tool by default and reliably parsing `grub.cfg` directly is too fragile
+to risk a false positive blocking a legitimate reboot. On Debian/Ubuntu,
+the kernel package's own postinst script (`update-grub`) reliably
+regenerates `grub.cfg` and keeps the newest kernel first by default in
+the vast majority of cases; if you suspect a mismatch there anyway
+(e.g. a custom `GRUB_DEFAULT` in `/etc/default/grub`), check manually
+with `sudo grub-reboot --help` / inspect `/boot/grub/grub.cfg`'s `menuentry`
+ordering before rebooting.
+
 ## Reboot required but instance became unreachable after rebooting
 
 See [docs/recovery.md](recovery.md) for the full AWS recovery workflow

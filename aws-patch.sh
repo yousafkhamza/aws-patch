@@ -570,6 +570,21 @@ handle_reboot() {
         return 0
     fi
 
+    if utils_is_true "${KERNEL_INSTALL_INCOMPLETE:-false}"; then
+        log_error "Skipping reboot: ${KERNEL_LATEST_INSTALLED:-the recorded kernel} has no boot files on disk, so a reboot cannot load it."
+        log_error "This is a stale package-database entry, not a real pending kernel -- rebooting now would only restart into the exact same running kernel."
+        log_error "See docs/troubleshooting.md#stale-kernel-database-entry to clear it, then re-run aws-patch --kernel to install a real one."
+        return 0
+    fi
+
+    if utils_is_true "${KERNEL_BOOT_DEFAULT_MISMATCH:-false}"; then
+        log_error "Skipping reboot: GRUB's current default does not point at ${KERNEL_LATEST_INSTALLED:-the installed kernel}."
+        log_error "Rebooting now would very likely restart into the exact same kernel that's already running, not the new one."
+        log_error "aws-patch never modifies GRUB -- set the default yourself first: sudo grubby --set-default ${AWS_PATCH_BOOT_DIR:-/boot}/vmlinuz-${KERNEL_LATEST_INSTALLED:-<version>}"
+        log_error "See docs/troubleshooting.md#grub-default-not-updated-to-the-new-kernel for details, then reboot manually once confirmed."
+        return 0
+    fi
+
     if [[ "$FLAG_DRY_RUN" == "true" || "$FLAG_CHECK" == "true" ]]; then
         log_info "Reboot would be recommended (skipped: $( [[ "$FLAG_CHECK" == "true" ]] && echo check-only || echo dry-run )  mode)"
         return 0

@@ -30,7 +30,11 @@ _AWS_PATCH_SUMMARY_SH_LOADED="true"
 summary_render() {
     local reboot_display security_display
 
-    if utils_is_true "${KERNEL_REBOOT_REQUIRED:-false}"; then
+    if utils_is_true "${KERNEL_INSTALL_INCOMPLETE:-false}"; then
+        reboot_display="${C_RED}STALE ENTRY${C_RESET}"
+    elif utils_is_true "${KERNEL_BOOT_DEFAULT_MISMATCH:-false}"; then
+        reboot_display="${C_RED}GRUB MISMATCH${C_RESET}"
+    elif utils_is_true "${KERNEL_REBOOT_REQUIRED:-false}"; then
         reboot_display="${C_YELLOW}YES${C_RESET}"
     else
         reboot_display="${C_GREEN}NO${C_RESET}"
@@ -63,7 +67,15 @@ summary_render() {
     printf '  %-22s %s\n' "Log File:"            "${AWS_PATCH_LOG_FILE:-unknown}"
     printf '\n'
 
-    if utils_is_true "${KERNEL_REBOOT_REQUIRED:-false}"; then
+    if utils_is_true "${KERNEL_INSTALL_INCOMPLETE:-false}"; then
+        log_error "Kernel ${KERNEL_LATEST_INSTALLED:-unknown} is recorded as installed, but its boot files are missing from /boot."
+        log_error "This is a stale package-database entry, not a real pending kernel -- rebooting will NOT change what kernel loads."
+        log_error "See docs/troubleshooting.md#stale-kernel-database-entry to clear it and install a real kernel."
+    elif utils_is_true "${KERNEL_BOOT_DEFAULT_MISMATCH:-false}"; then
+        log_error "Kernel ${KERNEL_LATEST_INSTALLED:-unknown} is installed, but GRUB's current default does not point at it."
+        log_error "Rebooting now would very likely restart into the exact same kernel that's already running."
+        log_error "See docs/troubleshooting.md#grub-default-not-updated-to-the-new-kernel to fix it before rebooting."
+    elif utils_is_true "${KERNEL_REBOOT_REQUIRED:-false}"; then
         log_warn "A reboot is recommended to run the latest installed kernel."
         log_warn "aws-patch never reboots automatically unless --reboot was passed."
     elif [[ -n "${KERNEL_LATEST_AVAILABLE:-}" && "${KERNEL_LATEST_AVAILABLE}" != "${KERNEL_LATEST_INSTALLED:-}" ]]; then
@@ -77,5 +89,5 @@ summary_render() {
     fi
 
     # Persist a machine-parseable summary line to the log for audit trails.
-    log_line "SUMMARY" "host=${HOSTNAME_FQDN:-unknown} os=${OS_NAME:-unknown} pm=${PKG_MANAGER:-unknown} arch=${ARCH:-unknown} running_kernel=${KERNEL_RUNNING:-unknown} latest_kernel=${KERNEL_LATEST_INSTALLED:-unknown} available_kernel=${KERNEL_LATEST_AVAILABLE:-none} reboot_required=${KERNEL_REBOOT_REQUIRED:-unknown} security_updates=${security_display} status=${PATCH_STATUS:-unknown}"
+    log_line "SUMMARY" "host=${HOSTNAME_FQDN:-unknown} os=${OS_NAME:-unknown} pm=${PKG_MANAGER:-unknown} arch=${ARCH:-unknown} running_kernel=${KERNEL_RUNNING:-unknown} latest_kernel=${KERNEL_LATEST_INSTALLED:-unknown} available_kernel=${KERNEL_LATEST_AVAILABLE:-none} reboot_required=${KERNEL_REBOOT_REQUIRED:-unknown} kernel_install_incomplete=${KERNEL_INSTALL_INCOMPLETE:-false} kernel_boot_default_mismatch=${KERNEL_BOOT_DEFAULT_MISMATCH:-false} security_updates=${security_display} status=${PATCH_STATUS:-unknown}"
 }

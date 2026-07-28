@@ -5,6 +5,72 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.10.3] - 2026-07-28
+
+### Added
+- **GRUB default boot entry mismatch detection (RHEL-family, where
+  `grubby` is available).** A kernel can be genuinely, correctly
+  installed -- real boot files present, not a stale database entry --
+  and still not be what a reboot would actually load, if GRUB's own
+  default boot entry was never updated to point at it (normally
+  automatic via the kernel package's own post-install scriptlets, but
+  can fail to complete after an interrupted transaction). Previously
+  `aws-patch` had no way to detect this before rebooting; a `--reboot`
+  run would silently restart into the exact same kernel that was already
+  running, with nothing in the summary to reveal why.
+  - `lib/kernel.sh`: new `_kernel_grub_default_matches()` -- read-only
+    (`grubby --default-kernel`) comparison against the kernel version a
+    reboot is expected to load. Sets `KERNEL_BOOT_DEFAULT_MISMATCH`.
+    Unverifiable systems (no `grubby` -- most Debian/Ubuntu installs)
+    are left unflagged rather than guessed at by parsing `grub.cfg`,
+    which would risk false positives blocking legitimate reboots.
+  - `lib/summary.sh`: reports `Reboot Required: GRUB DEFAULT MISMATCH`
+    distinctly from both a plain `YES` and a `STALE ENTRY`.
+  - `aws-patch.sh`: `handle_reboot()` skips the no-op reboot (even with
+    `--reboot`/`--yes`) and logs the exact `grubby --set-default`
+    command needed, instead of rebooting into nothing changing.
+  - `docs/troubleshooting.md`: new "GRUB default not updated to the new
+    kernel" section with the full fix.
+  - This is read-only inspection only -- `lib/kernel.sh` still never
+    writes to GRUB or changes the default boot entry itself; the file's
+    header comment was clarified to make that distinction explicit.
+- New test coverage in `tests/run_tests.sh` (`== GRUB default boot entry
+  mismatch ==`): mismatch detected, correct-default not falsely
+  flagged, and grubby-unavailable never blocks a reboot.
+
+## [1.10.2] - 2026-07-28
+
+### Added
+- **Stale kernel database entry detection.** A package manager's own
+  database can end up recording a kernel as "installed" when its actual
+  boot files were never written -- almost always caused by a kernel
+  transaction interrupted partway through (Ctrl+C/Ctrl+Z, a dropped SSH
+  session, an OOM kill). Previously, `aws-patch` trusted that database
+  entry the same way any tool would and recommended a reboot that could
+  never actually help, since GRUB has nothing new to boot into --
+  rebooting just restarts into the exact same running kernel, with no
+  way for the administrator to tell that from the summary alone.
+  - `lib/kernel.sh`: new `_kernel_boot_files_present()` sanity-checks
+    that `/boot/vmlinuz-<version>` actually exists for the "latest
+    installed" kernel before trusting it. `kernel_reboot_required()` now
+    sets `KERNEL_INSTALL_INCOMPLETE` when it doesn't. OS-agnostic --
+    `/boot/vmlinuz-<version>` is the same naming convention on
+    Debian/Ubuntu and every RPM-based family.
+  - `lib/summary.sh`: reports `Reboot Required: STALE ENTRY` instead of
+    a misleading plain `YES`, with the real cause and fix logged.
+  - `aws-patch.sh`: `handle_reboot()` now skips the no-op reboot
+    entirely when this is detected (even with `--reboot`/`--yes`) and
+    logs the actual remediation instead.
+  - `docs/troubleshooting.md`: new "Stale kernel database entry" section
+    with full recovery steps for both Debian/Ubuntu and RHEL-family
+    systems (Amazon Linux, RHEL, Rocky, AlmaLinux).
+  - `AWS_PATCH_BOOT_DIR` env var (defaults to `/boot`) makes the check
+    testable without touching the real filesystem.
+- New test coverage in `tests/run_tests.sh` reproducing the exact
+  real-world scenario (`== stale kernel database entry (missing /boot
+  files) ==`), plus a false-positive guard confirming a real installed
+  kernel with genuine boot files is never flagged.
+
 ## [1.10.1] - 2026-07-28
 
 ### Fixed
