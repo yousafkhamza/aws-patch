@@ -23,6 +23,7 @@
 #   pm_check_releasever_update   (Amazon Linux 2023 only; no-op elsewhere)
 #   pm_list_releasever_updates   (Amazon Linux 2023 only; no-op elsewhere)
 #   pm_upgrade_releasever        (Amazon Linux 2023 only)
+#   pm_upgrade_releasever_no_kernel (Amazon Linux 2023 only)
 
 set -Eeuo pipefail
 
@@ -203,6 +204,38 @@ _dnf_current_releasever_snapshot() {
 }
 
 # ---------------------------------------------------------------------------
+# _dnf_releasever_has_real_changes <candidate>
+#   Private helper. Read-only, safe: `--assumeno` auto-declines the
+#   transaction confirmation prompt, so nothing is ever installed or
+#   changed -- the same trusted pattern already used elsewhere in this
+#   file (pm_security_only's `dnf updateinfo --security --assumeno`).
+#
+#   Asks dnf directly whether upgrading to $candidate would actually
+#   have any real package changes to make, rather than trusting
+#   /etc/os-release's PRETTY_NAME. This exists because that file can
+#   drift from dnf's actual resolved package state -- most notably after
+#   a kernel/release-upgrade transaction that was interrupted partway
+#   through: PRETTY_NAME can end up updated to the target release's
+#   dated snapshot even though the release's real package set (e.g. its
+#   kernel build) was never actually installed. A host in that state
+#   would otherwise report itself as "already current" forever, even
+#   though `dnf upgrade --releasever=<that exact version>` still finds
+#   real content to install.
+#
+#   Returns 0 if dnf reports real work to do, 1 if genuinely
+#   "Nothing to do" (truly already current).
+# ---------------------------------------------------------------------------
+_dnf_releasever_has_real_changes() {
+    local candidate="$1"
+    local output
+    output="$(dnf upgrade --releasever="$candidate" --assumeno 2>&1 || true)"
+    if printf '%s' "$output" | grep -qi 'Nothing to do'; then
+        return 1
+    fi
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # pm_check_releasever_update
 #   This function is read-only: it only detects whether a newer release
 #   is available and echoes its version string (e.g. "2023.12.20260629"),
@@ -212,20 +245,35 @@ _dnf_current_releasever_snapshot() {
 #   IMPORTANT: the release-notification banner scraped by
 #   _dnf_collect_releasever_candidates lists the latest known AL2023
 #   release unconditionally -- including when it's the exact release
-#   you're already running. Without comparing against the currently
-#   running dated snapshot, this function would report "newer release
-#   available" forever, even immediately after successfully upgrading to
-#   that exact release -- re-triggering the expensive
-#   pm_upgrade_releasever step on every single run for no reason. Only a
-#   candidate that is genuinely version-greater than
-#   _dnf_current_releasever_snapshot is ever reported.
+#   you're already running. A candidate that is genuinely
+#   version-greater than _dnf_current_releasever_snapshot (the common,
+#   healthy case) is reported immediately, no extra check needed.
+#
+#   But when the candidate is NOT textually newer -- i.e. PRETTY_NAME
+#   already claims that exact dated release -- this function does NOT
+#   simply trust that and stay silent. PRETTY_NAME can drift from dnf's
+#   actual resolved package state (see _dnf_releasever_has_real_changes
+#   above for the real-world scenario this covers), so this ambiguous
+#   case is confirmed authoritatively via a safe, read-only
+#   `--assumeno` dry-run before deciding. This keeps both fixed bugs
+#   fixed at once: no perpetual "newer release" loop when genuinely
+#   current, and no false "up to date" when PRETTY_NAME is lying.
 # ---------------------------------------------------------------------------
 pm_check_releasever_update() {
     local latest current
     latest="$(_dnf_collect_releasever_candidates | sort -V | tail -n1 || true)"
+    [[ -z "$latest" ]] && return 0
+
     current="$(_dnf_current_releasever_snapshot)"
 
-    if [[ -n "$latest" ]] && utils_version_gt "$latest" "$current"; then
+    if utils_version_gt "$latest" "$current"; then
+        printf '%s' "$latest"
+        return 0
+    fi
+
+    # Textually "already current" -- confirm that's actually true before
+    # trusting it.
+    if _dnf_releasever_has_real_changes "$latest"; then
         printf '%s' "$latest"
     fi
 }
@@ -240,12 +288,32 @@ pm_check_releasever_update() {
 #   selection) rather than just the single highest version
 #   pm_check_releasever_update reports.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# pm_list_releasever_updates
+#   Read-only: echoes every distinct release-version candidate found that
+#   is genuinely newer than the currently running release, one per line,
+#   sorted ascending (lowest to highest). Empty output if none found /
+#   not on AL2023 / already on the latest release. Used to present a
+#   full list of available point releases (e.g. for interactive
+#   selection) rather than just the single highest version
+#   pm_check_releasever_update reports.
+#
+#   Kept consistent with pm_check_releasever_update's drift-confirmation
+#   logic (see there): the highest candidate is included if it's either
+#   textually newer than the current dated snapshot, or confirmed via
+#   pm_check_releasever_update to have real content despite looking
+#   textually equal (PRETTY_NAME drift). Without this, an interactive
+#   run could set AL_RELEASEVER_UPDATE to a confirmed-real version yet
+#   present an empty selection list for it.
+# ---------------------------------------------------------------------------
 pm_list_releasever_updates() {
-    local current candidate
+    local current confirmed_latest candidate
     current="$(_dnf_current_releasever_snapshot)"
+    confirmed_latest="$(pm_check_releasever_update)"
+
     while IFS= read -r candidate; do
         [[ -z "$candidate" ]] && continue
-        if utils_version_gt "$candidate" "$current"; then
+        if utils_version_gt "$candidate" "$current" || [[ -n "$confirmed_latest" && "$candidate" == "$confirmed_latest" ]]; then
             printf '%s\n' "$candidate"
         fi
     done < <(_dnf_collect_releasever_candidates | sort -Vu)
@@ -263,8 +331,25 @@ pm_list_releasever_updates() {
 # ---------------------------------------------------------------------------
 pm_upgrade_releasever() {
     local target_releasever="${1:?target releasever required}"
-    log_warn "Newer Amazon Linux release available (${target_releasever}); upgrading release metadata before patching"
+    log_warn "Newer Amazon Linux release available (${target_releasever}); upgrading release metadata before patching (kernel included)"
     common_retry 2 5 -- dnf upgrade -y --releasever="${target_releasever}"
+}
+
+# ---------------------------------------------------------------------------
+# pm_upgrade_releasever_no_kernel <version>
+#   Same as pm_upgrade_releasever, but the kernel package is excluded
+#   from THIS transaction too via dnf's native --exclude -- used when
+#   --kernel was NOT passed. Without this, crossing an AL2023 point
+#   release would silently pull in whatever kernel that release bundles
+#   regardless of --kernel, defeating the whole point of the flag: a
+#   release snapshot's package set very often includes a kernel bump
+#   alongside everything else. Never removes or modifies an installed
+#   kernel; same guarantee as pm_full_upgrade_no_kernel.
+# ---------------------------------------------------------------------------
+pm_upgrade_releasever_no_kernel() {
+    local target_releasever="${1:?target releasever required}"
+    log_warn "Newer Amazon Linux release available (${target_releasever}); upgrading release metadata before patching (kernel excluded; pass --kernel to include)"
+    common_retry 2 5 -- dnf upgrade -y --releasever="${target_releasever}" --exclude='kernel*'
 }
 
 # ---------------------------------------------------------------------------

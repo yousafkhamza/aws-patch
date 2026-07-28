@@ -93,8 +93,28 @@ run (no flag needed), collecting candidates from `dnf check-update`,
 and crosses the point-release boundary via
 `dnf upgrade -y --releasever=<version>` *before* running the normal full
 upgrade and kernel-metapackage step -- so a kernel gated behind a newer
-release becomes reachable in the same run. You'll see this reflected in
-the summary output:
+release becomes reachable in the same run. Every pending point release
+is logged with its exact command, not just the one that'll be used:
+
+```
+ℹ Newer Amazon Linux release available: 2023.12.20260727
+ℹ Available Amazon Linux point releases:
+ℹ   - 2023.12.20260720  ->  dnf upgrade --releasever=2023.12.20260720
+ℹ   - 2023.12.20260724  ->  dnf upgrade --releasever=2023.12.20260724
+ℹ   - 2023.12.20260727 (latest)  ->  dnf upgrade --releasever=2023.12.20260727
+ℹ This run will cross to 2023.12.20260727 with the kernel excluded (pass --kernel to include it).
+```
+
+**Since 1.10.5, this step respects `--kernel`.** Earlier versions always
+applied the target release's *full* package set when crossing a
+boundary -- which very often bundles a kernel bump alongside everything
+else -- regardless of whether `--kernel` was passed. That could silently
+defeat `--kernel`'s whole opt-in guarantee: a plain `--yes` run with no
+`--kernel` could still end up installing a new kernel, just because a
+release boundary happened to be pending. Now, without `--kernel`, the
+release-crossing transaction itself excludes the kernel package
+(`--exclude='kernel*'`), consistent with the normal patch step. You'll
+see this reflected in the summary output:
 
 ```
 == aws-patch Summary ==
@@ -106,7 +126,7 @@ the summary output:
 and, during a live run:
 
 ```
-⚠ Newer Amazon Linux release available (2023.12.20260629); upgrading release metadata before patching
+⚠ Newer Amazon Linux release available (2023.12.20260629); upgrading release metadata before patching (kernel excluded; pass --kernel to include)
 ```
 
 If nothing is announced (already on the latest point release), this step
@@ -147,6 +167,26 @@ it again, since crossing a release boundary can newly expose packages
 ℹ This run upgraded the Amazon Linux release to 2023.12.20260629.
 ℹ Run aws-patch again to pick up any kernel or package now available under this release
 ℹ that wasn't visible under the previous one.
+```
+
+**"Already current" but a real update still exists (PRETTY_NAME
+drift):** the opposite failure mode is also possible: `aws-patch`
+reports nothing available, `/etc/os-release`'s `PRETTY_NAME` claims
+you're already on the announced release, but `dnf upgrade
+--releasever=<that exact version>` still finds real content (e.g. a
+real kernel package) to install. This happens when a *previous*
+release-upgrade transaction was interrupted partway through --
+`PRETTY_NAME` gets updated early in that process, but the release's
+actual package set never fully lands. Since 1.10.4, `aws-patch` doesn't
+trust `PRETTY_NAME` alone for this decision: whenever the scraped
+banner candidate textually matches what `PRETTY_NAME` claims, it
+double-checks with a safe, read-only `dnf upgrade --releasever=<version>
+--assumeno` dry-run before deciding there's truly nothing to do. If
+you're on an older version and see this exact mismatch, upgrade
+`aws-patch` or work around it manually:
+
+```bash
+sudo dnf upgrade --releasever=<the-announced-version> -y
 ```
 
 **Manual resolution** (if you want to cross the boundary yourself first):

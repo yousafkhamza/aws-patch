@@ -5,6 +5,70 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.10.5] - 2026-07-28
+
+### Added
+- **Full AL2023 point-release list logged on every run.** Previously
+  only the single highest pending release was logged
+  (`Newer Amazon Linux release available: X`). Now every pending point
+  release is listed with its exact `dnf upgrade --releasever=...`
+  command, and the run explicitly states whether the kernel will be
+  included or excluded when crossing -- visible in `--check`,
+  `--dry-run`, and live runs alike, not just the interactive picker.
+
+### Fixed
+- **`--kernel` didn't govern the AL2023 release-crossing step.** Crossing
+  a point-release boundary applies that release's *full* package set,
+  which very often bundles a kernel bump alongside everything else.
+  `pm_upgrade_releasever` always applied it unconditionally regardless of
+  `--kernel` -- meaning a plain `--yes` run (no `--kernel`) could still
+  silently end up installing a new kernel, just because a release
+  boundary happened to be pending, completely defeating `--kernel`'s
+  opt-in guarantee for that specific path.
+  - `lib/dnf.sh`: new `pm_upgrade_releasever_no_kernel()`, mirroring
+    `pm_full_upgrade_no_kernel()` -- runs the release-crossing
+    transaction with native `--exclude='kernel*'`.
+  - `aws-patch.sh`: `run_patch()` now selects the correct
+    releasever-upgrade function based on `FLAG_KERNEL`, exactly like it
+    already does for the normal full-upgrade step. Dry-run messaging
+    updated to match.
+- New test coverage confirming `pm_upgrade_releasever_no_kernel` excludes
+  the kernel and `pm_upgrade_releasever` (the `--kernel` path) does not.
+  81/81 tests passing.
+
+## [1.10.4] - 2026-07-28
+
+### Fixed
+- **AL2023 release-update detection could report "already current" when
+  a real update still existed.** The 1.10.1 fix compared the scraped
+  banner candidate against `/etc/os-release`'s `PRETTY_NAME` to stop a
+  perpetual "newer release available" loop -- correct in the common
+  case, but `PRETTY_NAME` can itself drift from dnf's actual resolved
+  package state: a previous release-upgrade transaction interrupted
+  partway through can leave `PRETTY_NAME` updated to the target
+  release's dated snapshot even though that release's real package set
+  (e.g. its kernel build) never actually landed. A host in that state
+  reported itself as fully up to date forever, even though `dnf upgrade
+  --releasever=<that exact version>` still found real content (a real,
+  31MB kernel package) to install.
+  - `lib/dnf.sh`: new `_dnf_releasever_has_real_changes()` -- a safe,
+    read-only `dnf upgrade --releasever=<candidate> --assumeno` dry-run
+    (same trusted `--assumeno` pattern already used by
+    `pm_security_only`; nothing is ever installed). `pm_check_releasever_update`
+    now calls this to authoritatively confirm the ambiguous case (banner
+    candidate textually equal to what `PRETTY_NAME` claims) instead of
+    trusting the file blindly. A candidate that's textually newer is
+    still reported immediately with no extra network call, keeping the
+    common/healthy path exactly as fast as before.
+  - `pm_list_releasever_updates` kept consistent with the same
+    confirmation, so an interactive release picker can never show an
+    empty list for a version `pm_check_releasever_update` already
+    confirmed as real.
+- New regression tests reproducing the exact drift scenario (`PRETTY_NAME`
+  claims current, `--assumeno` reveals a real kernel package pending) for
+  both `pm_check_releasever_update` and `pm_list_releasever_updates`.
+  79/79 tests passing.
+
 ## [1.10.3] - 2026-07-28
 
 ### Added

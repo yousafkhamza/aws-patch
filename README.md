@@ -41,7 +41,21 @@ plain `dnf upgrade` won't cross on its own. `aws-patch` detects this
 automatically on every run and crosses the boundary first when needed --
 see [docs/troubleshooting.md](docs/troubleshooting.md#amazon-linux-2023-nothing-to-do-but-a-newer-releasekernel-is-announced)
 for details. No flag required; it's a no-op when already on the latest
-release, and a no-op on every other OS.
+release, and a no-op on every other OS. `--kernel` governs this step too
+(since 1.10.5): crossing a release boundary very often bundles a kernel
+bump alongside everything else, so without `--kernel` the kernel is
+excluded from the release-crossing transaction the same way it's
+excluded from a normal patch run. Every pending point release is also
+listed with its exact command in the log, not just the one that'll be
+used:
+
+```
+ℹ Available Amazon Linux point releases:
+ℹ   - 2023.12.20260720  ->  dnf upgrade --releasever=2023.12.20260720
+ℹ   - 2023.12.20260724  ->  dnf upgrade --releasever=2023.12.20260724
+ℹ   - 2023.12.20260727 (latest)  ->  dnf upgrade --releasever=2023.12.20260727
+ℹ This run will cross to 2023.12.20260727 with the kernel excluded (pass --kernel to include it).
+```
 
 **Predicting a reboot before patching:** `--check` and `--dry-run` also
 report whether a newer kernel is already sitting in the repo -- not just
@@ -686,9 +700,13 @@ commands) with a short backoff. See
 for manual resolution steps.
 
 **On Amazon Linux 2023, `dnf upgrade` shows a newer release is available but says "Nothing to do" -- does aws-patch handle that?**
-Yes, automatically, every run. If multiple point releases are available
-and you're running interactively (no `--yes`), you'll be asked which one
-to upgrade to. See
+Yes, automatically, every run — every pending point release is logged
+with its exact command, not just the one that'll be used. If multiple
+point releases are available and you're running interactively (no
+`--yes`), you'll be asked which one to upgrade to. This step respects
+`--kernel` too: without it, the kernel is excluded from the
+release-crossing transaction the same way it's excluded from a normal
+patch run. See
 [docs/troubleshooting.md](docs/troubleshooting.md#amazon-linux-2023-nothing-to-do-but-a-newer-releasekernel-is-announced).
 
 **Does Amazon Linux 2 have the same point-release mechanism?**

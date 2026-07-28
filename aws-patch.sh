@@ -300,6 +300,29 @@ run_preflight() {
             if declare -F pm_list_releasever_updates >/dev/null 2>&1; then
                 AL_RELEASEVER_UPDATES_LIST="$(pm_list_releasever_updates || true)"
             fi
+
+            # Show every pending point release with its exact command --
+            # visible on every run (--check, --dry-run, --yes, and
+            # interactive alike), not just the interactive picker, so an
+            # administrator can review what's available and what this
+            # specific run will do about the kernel before it happens.
+            if [[ -n "$AL_RELEASEVER_UPDATES_LIST" ]]; then
+                log_info "Available Amazon Linux point releases:"
+                local _rv
+                while IFS= read -r _rv; do
+                    [[ -z "$_rv" ]] && continue
+                    if [[ "$_rv" == "$AL_RELEASEVER_UPDATE" ]]; then
+                        log_info "  - ${_rv} (latest)  ->  dnf upgrade --releasever=${_rv}"
+                    else
+                        log_info "  - ${_rv}  ->  dnf upgrade --releasever=${_rv}"
+                    fi
+                done <<< "$AL_RELEASEVER_UPDATES_LIST"
+                if [[ "$FLAG_KERNEL" == "true" ]]; then
+                    log_info "This run will cross to ${AL_RELEASEVER_UPDATE} with the kernel included (--kernel passed)."
+                else
+                    log_info "This run will cross to ${AL_RELEASEVER_UPDATE} with the kernel excluded (pass --kernel to include it)."
+                fi
+            fi
         fi
     fi
     export AL_RELEASEVER_UPDATES_LIST
@@ -463,7 +486,11 @@ run_patch() {
 
     if [[ "$FLAG_DRY_RUN" == "true" ]]; then
         if [[ -n "${AL_RELEASEVER_UPDATE:-}" ]]; then
-            log_info "[dry-run] Would run: pm_upgrade_releasever (to ${AL_RELEASEVER_UPDATE})"
+            if [[ "$FLAG_KERNEL" == "true" ]]; then
+                log_info "[dry-run] Would run: pm_upgrade_releasever (to ${AL_RELEASEVER_UPDATE}, kernel included)"
+            else
+                log_info "[dry-run] Would run: pm_upgrade_releasever_no_kernel (to ${AL_RELEASEVER_UPDATE}, kernel excluded; pass --kernel to include)"
+            fi
         fi
         log_info "[dry-run] Would run: pm_update_repos"
         if [[ "$FLAG_KERNEL" == "true" ]]; then
@@ -494,21 +521,27 @@ run_patch() {
     # proceeds against the currently pinned release. In interactive runs
     # (no --yes) with more than one candidate release, prompts the
     # administrator to choose which one; --yes always takes the highest.
-    # NOTE: this step is independent of --kernel/FLAG_KERNEL -- it moves
-    # repo metadata to a new point-release snapshot, which the immediately
-    # following pm_full_upgrade/pm_full_upgrade_no_kernel step then
-    # applies (kernel-excluded, if --kernel wasn't passed) exactly as on
-    # any other run.
+    # IMPORTANT: this step now respects --kernel/FLAG_KERNEL directly
+    # (fixed -- it used to always pull in whatever kernel the target
+    # release bundled, regardless of --kernel, since a release
+    # snapshot's package set very often includes a kernel bump. Without
+    # this, --kernel's whole opt-in guarantee could be silently defeated
+    # by crossing a release boundary alone).
     if [[ -n "${AL_RELEASEVER_UPDATE:-}" ]] && declare -F pm_upgrade_releasever >/dev/null 2>&1; then
         local selected_releasever="$AL_RELEASEVER_UPDATE"
         if [[ "$FLAG_YES" != "true" ]]; then
             selected_releasever="$(prompt_releasever_selection)"
         fi
 
-        _al_releasever_retry_fn() { pm_upgrade_releasever "$selected_releasever"; }
+        local releasever_upgrade_fn="pm_upgrade_releasever"
+        if [[ "$FLAG_KERNEL" != "true" ]] && declare -F pm_upgrade_releasever_no_kernel >/dev/null 2>&1; then
+            releasever_upgrade_fn="pm_upgrade_releasever_no_kernel"
+        fi
+
+        _al_releasever_retry_fn() { "$releasever_upgrade_fn" "$selected_releasever"; }
 
         ui_spinner_start "Upgrading Amazon Linux release to ${selected_releasever}"
-        if pm_upgrade_releasever "$selected_releasever"; then
+        if "$releasever_upgrade_fn" "$selected_releasever"; then
             ui_spinner_stop ok
             AL_RELEASEVER_UPGRADED="$selected_releasever"
         else

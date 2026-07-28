@@ -484,6 +484,14 @@ BANNER
     # shellcheck disable=SC2317 # invoked indirectly via pm_check_releasever_update
     dnf() {
         case "$*" in
+            *"upgrade --releasever=2023.12.20260727 --assumeno"*)
+                # Confirmation call: genuinely nothing to do, since the
+                # host really is already on this exact release/kernel.
+                echo "Dependencies resolved."
+                echo "Nothing to do."
+                echo "Complete!"
+                return 0
+                ;;
             *"check-update"*)
                 {
                     cat <<'BANNER'
@@ -521,6 +529,65 @@ BANNER
         echo "PASS: pm_list_releasever_updates also correctly reports nothing when already on the latest dated snapshot"
     else
         echo "FAIL: pm_list_releasever_updates expected empty, got: ${list_result}"
+    fi
+
+    # Case 2c (real-world regression, second incident): PRETTY_NAME says
+    # the exact same dated snapshot, but that file drifted from reality
+    # -- an earlier interrupted release-upgrade transaction updated
+    # /etc/os-release without the release's real package content (e.g.
+    # its kernel build) ever actually landing. `dnf upgrade
+    # --releasever=<that version>` still finds real work to do. The
+    # textual "already current" check alone would wrongly stay silent
+    # here; the --assumeno confirmation must catch it.
+    # shellcheck disable=SC2317 # invoked indirectly via pm_check_releasever_update
+    dnf() {
+        case "$*" in
+            *"upgrade --releasever=2023.12.20260727 --assumeno"*)
+                cat <<'TRANSACTION'
+Dependencies resolved.
+=============================================================================
+ Package     Architecture   Version                        Repository   Size
+=============================================================================
+Installing:
+ kernel      x86_64         1:6.1.176-223.369.amzn2023      amazonlinux   31 M
+
+Transaction Summary
+=============================================================================
+Install  1 Package
+TRANSACTION
+                return 1
+                ;;
+            *"check-update"*)
+                {
+                    cat <<'BANNER'
+WARNING:
+  A newer release of "Amazon Linux" is available.
+
+  Available Versions:
+
+  Version 2023.12.20260727:
+    Run the following command to upgrade to 2023.12.20260727:
+BANNER
+                } >&2
+                return 100
+                ;;
+            *"check-release-update --help"*) return 1 ;;
+            *) return 0 ;;
+        esac
+    }
+    export -f dnf
+    result="$(pm_check_releasever_update)"
+    if [[ "$result" == "2023.12.20260727" ]]; then
+        echo "PASS: PRETTY_NAME drift (claims current, but dnf finds real content) is caught by the --assumeno confirmation"
+    else
+        echo "FAIL: expected 2023.12.20260727 despite textual match, got '${result}' -- PRETTY_NAME drift would go undetected"
+    fi
+
+    list_result="$(pm_list_releasever_updates)"
+    if [[ "$list_result" == "2023.12.20260727" ]]; then
+        echo "PASS: pm_list_releasever_updates also includes the drift-confirmed version despite the textual match"
+    else
+        echo "FAIL: pm_list_releasever_updates expected '2023.12.20260727', got: ${list_result}"
     fi
 
     # Case 2c: genuinely behind -- banner lists a snapshot newer than the
@@ -1183,6 +1250,60 @@ for pm_file in yum.sh dnf.sh; do
     done < "/tmp/aws-patch-${pm_file}-no-kernel-test-$$.txt"
     rm -f "/tmp/aws-patch-${pm_file}-no-kernel-test-$$.txt"
 done
+
+# ---------------------------------------------------------------------------
+# Section: AL2023 release-crossing respects --kernel
+#   Crossing an AL2023 point-release boundary applies that release's
+#   full package set, which very often bundles a kernel bump alongside
+#   everything else. This must respect --kernel exactly like the normal
+#   full-upgrade step does, or --kernel's opt-in guarantee could be
+#   silently defeated just by a release boundary existing.
+# ---------------------------------------------------------------------------
+echo "== AL2023 release-crossing respects --kernel =="
+
+(
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/lib/logger.sh"
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/lib/utils.sh"
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/lib/common.sh"
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/lib/dnf.sh"
+
+    call_log="$(mktemp)"
+    # shellcheck disable=SC2317 # invoked indirectly via pm_upgrade_releasever(_no_kernel)
+    dnf() {
+        echo "$*" >> "$call_log"
+        return 0
+    }
+    export -f dnf
+
+    pm_upgrade_releasever_no_kernel "2023.12.20260727" >/dev/null
+    if grep -q -- "--releasever=2023.12.20260727" "$call_log" && grep -q -- "--exclude=kernel\*" "$call_log"; then
+        echo "PASS: pm_upgrade_releasever_no_kernel excludes the kernel from the release-crossing transaction"
+    else
+        echo "FAIL: pm_upgrade_releasever_no_kernel did not exclude kernel: $(cat "$call_log")"
+    fi
+    : > "$call_log"
+
+    pm_upgrade_releasever "2023.12.20260727" >/dev/null
+    if grep -q -- "--releasever=2023.12.20260727" "$call_log" && ! grep -q -- "--exclude=kernel\*" "$call_log"; then
+        echo "PASS: pm_upgrade_releasever (with --kernel) includes the kernel, no exclusion"
+    else
+        echo "FAIL: pm_upgrade_releasever unexpectedly excluded kernel or missed the releasever: $(cat "$call_log")"
+    fi
+
+    rm -f "$call_log"
+) > /tmp/aws-patch-releasever-kernel-test-$$.txt 2>&1
+
+while IFS= read -r line; do
+    case "$line" in
+        PASS:*) pass "${line#PASS: }" ;;
+        FAIL:*) fail "${line#FAIL: }" ;;
+    esac
+done < /tmp/aws-patch-releasever-kernel-test-$$.txt
+rm -f /tmp/aws-patch-releasever-kernel-test-$$.txt
 
 # ---------------------------------------------------------------------------
 # Section: stale kernel database entry (phantom "installed" kernel)
